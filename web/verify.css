@@ -39,6 +39,8 @@
   --forms-input-border-outline: var(--lightblue-1);
   --success-fg: var(--green-1);
   --success-bg: var(--lightgreen-1);
+  --skipped-fg: var(--grey-1);
+  --skipped-bg: var(--lightgrey-2);
   --danger-fg: var(--red-1);
   --danger-bg: #fbeaea;
   --status-online: var(--green-1);
@@ -278,6 +280,12 @@ code {
   color: var(--text-secondary);
 }
 
+.verify-field__hint {
+  margin: 0;
+  font: var(--fw-regular) var(--text-sm) / var(--lh-sm) var(--font-sans);
+  color: var(--text-muted);
+}
+
 .verify-input {
   display: flex;
   align-items: center;
@@ -426,6 +434,10 @@ code {
   background: var(--danger-bg);
 }
 
+.verify-check--skipped {
+  background: var(--skipped-bg);
+}
+
 .verify-check__icon {
   flex: none;
   width: 18px;
@@ -435,6 +447,7 @@ code {
 
 .verify-check__icon--pass { color: var(--success-fg); }
 .verify-check__icon--fail { color: var(--danger-fg); }
+.verify-check__icon--skipped { color: var(--skipped-fg); }
 
 .verify-check__body {
   flex: 1;
