@@ -72,6 +72,11 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := receipt.ValidateChallengeNonce(req.ChallengeNonce); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	// ── Inference boundary: sealed-shim does NOT run the model here ──
 	inferOut, err := s.inference.Complete(req)
 	if err != nil {
@@ -81,8 +86,9 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// ── Trust boundary: sealed-shim wraps the result in a verifiable receipt ──
 	sealedReceipt, err := s.receipt.Seal(receipt.Input{
-		Prompt:   extractPrompt(req),
-		Response: inferOut.Content,
+		Prompt:         extractPrompt(req),
+		Response:       inferOut.Content,
+		ChallengeNonce: req.ChallengeNonce,
 	})
 	if err != nil {
 		log.Printf("receipt build failed: %v", err)

@@ -20,6 +20,7 @@ const CHECK_HINTS = {
 
 const ICON_PASS = `<svg class="verify-check__icon verify-check__icon--pass" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 9.2l2.1 2.1 4.9-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const ICON_FAIL = `<svg class="verify-check__icon verify-check__icon--fail" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M6.2 6.2l5.6 5.6M11.8 6.2l-5.6 5.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+const ICON_SKIPPED = `<svg class="verify-check__icon verify-check__icon--skipped" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="8" stroke="currentColor" stroke-width="1.5"/><circle cx="9" cy="5.4" r="0.85" fill="currentColor"/><path d="M9 7.8V13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
 
 let wasmReady = false;
 
@@ -66,7 +67,53 @@ function truncateHex(s) {
   return `${clean.slice(0, 8)}…${clean.slice(-8)}`;
 }
 
-function renderCheck(check) {
+function renderFreshnessCheck(check, challengeHex) {
+  const li = document.createElement('li');
+  const hashDisplay = check.hash
+    ? `<span class="verify-check__hash">(${truncateHex(check.hash)})</span>`
+    : '';
+
+  let stateClass;
+  let icon;
+  let label;
+  let detail;
+
+  if (challengeHex === '') {
+    stateClass = 'verify-check--skipped';
+    icon = ICON_SKIPPED;
+    label = 'Freshness (Skipped)';
+    detail = 'Nonce present, but no challenge supplied to verify freshness';
+  } else if (check.ok) {
+    stateClass = 'verify-check--pass';
+    icon = ICON_PASS;
+    label = CHECK_LABELS.freshness;
+    detail = 'nonce matches challenge';
+  } else {
+    stateClass = 'verify-check--fail';
+    icon = ICON_FAIL;
+    label = CHECK_LABELS.freshness;
+    detail = check.detail || 'nonce does not match challenge';
+  }
+
+  li.className = `verify-check ${stateClass}`;
+  li.innerHTML = `
+    ${icon}
+    <div class="verify-check__body">
+      <div class="verify-check__label">
+        ${label}
+        ${hashDisplay}
+      </div>
+      <div class="verify-check__detail">${detail}</div>
+    </div>
+  `;
+  return li;
+}
+
+function renderCheck(check, challengeHex = '') {
+  if (check.id === 'freshness') {
+    return renderFreshnessCheck(check, challengeHex);
+  }
+
   const li = document.createElement('li');
   const passed = check.ok;
 
@@ -210,10 +257,11 @@ async function handleFile(file) {
   }
 
   hideStatus();
-  renderResults(wasmResult, rekorInfo, rekorError);
+  const challenge = document.getElementById('challenge-input').value.trim();
+  renderResults(wasmResult, rekorInfo, rekorError, challenge);
 }
 
-function renderResults(result, rekorInfo, rekorError = null) {
+function renderResults(result, rekorInfo, rekorError = null, challengeHex = '') {
   const results = document.getElementById('results');
   const checklist = document.getElementById('checklist');
   const badge = document.getElementById('overall-badge');
@@ -223,7 +271,7 @@ function renderResults(result, rekorInfo, rekorError = null) {
   checklist.innerHTML = '';
 
   for (const check of result.checks) {
-    checklist.appendChild(renderCheck(check));
+    checklist.appendChild(renderCheck(check, challengeHex));
   }
 
   if (rekorInfo) {

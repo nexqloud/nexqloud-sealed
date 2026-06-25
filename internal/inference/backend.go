@@ -6,8 +6,9 @@ type Message struct {
 }
 
 type Request struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
+	Model          string    `json:"model"`
+	Messages       []Message `json:"messages"`
+	ChallengeNonce string    `json:"challenge_nonce,omitempty"`
 }
 
 type Response struct {

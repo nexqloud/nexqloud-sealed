@@ -4,7 +4,7 @@
 *.swp
 *.swo
 
-# Design system (local copy; link or vendor separately for deploy)
+# Design system (local dev reference only — not deployed)
 web/design-system/
 
 # Wasm build outputs (built on Cloudflare Pages via make all)

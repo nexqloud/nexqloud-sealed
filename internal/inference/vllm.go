@@ -23,7 +23,13 @@ func NewVLLM(baseURL string) *VLLM {
 }
 
 func (v *VLLM) Complete(req Request) (Response, error) {
-	body, err := json.Marshal(req)
+	body, err := json.Marshal(struct {
+		Model    string    `json:"model"`
+		Messages []Message `json:"messages"`
+	}{
+		Model:    req.Model,
+		Messages: req.Messages,
+	})
 	if err != nil {
 		return Response{}, err
 	}
