@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NexQloud Sealed — Receipt Verifier</title>
+  <link rel="icon" href="design-system/assets/logos/nexqloud-mark.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="design-system/styles.css" />
+  <link rel="stylesheet" href="verify.css" />
+</head>
+<body class="verify-page">
+  <div class="verify-shell">
+    <header class="verify-header">
+      <div class="verify-brand">
+        <img class="verify-brand__wordmark" src="design-system/assets/logos/nexqloud-wordmark-light.svg" alt="nexqloud" height="22" />
+      </div>
+
+      <div class="verify-eyebrow">
+        <span class="verify-eyebrow__dot" aria-hidden="true"></span>
+        <span>Public Verification</span>
+      </div>
+
+      <h1 class="verify-title">NexQloud Sealed</h1>
+      <p class="verify-lede">
+        Cryptographic receipt verification runs entirely in your browser.
+        Your <code>receipt.json</code> never leaves this device.
+      </p>
+    </header>
+
+    <section id="drop-zone" class="verify-card verify-drop" tabindex="0" role="button" aria-label="Upload receipt.json">
+      <input type="file" id="file-input" accept=".json,application/json" class="sr-only" />
+      <svg class="verify-drop__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 16V4m0 0L8 8m4-4 4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
+      </svg>
+      <p class="verify-drop__title">Drop <span class="verify-drop__filename">receipt.json</span> here</p>
+      <p class="verify-drop__hint">or click to browse</p>
+    </section>
+
+    <div class="verify-field">
+      <label class="verify-field__label" for="challenge-input">Challenge nonce (optional)</label>
+      <div class="verify-input">
+        <input type="text" id="challenge-input" placeholder="64-char hex nonce" spellcheck="false" autocomplete="off" />
+      </div>
+    </div>
+
+    <div id="status" class="verify-status" hidden>
+      <div id="status-spinner" class="verify-spinner" aria-hidden="true"></div>
+      <span id="status-text">Initializing WebAssembly module…</span>
+    </div>
+
+    <section id="results" class="verify-results" hidden>
+      <div class="verify-results__head">
+        <h2 class="verify-section-label">Verification Checks</h2>
+        <span id="overall-badge" class="verify-badge"></span>
+      </div>
+      <ul id="checklist" class="verify-checklist" role="list"></ul>
+
+      <div id="ledger-section" class="verify-ledger" hidden>
+        <h3 class="verify-section-label">Public Ledger</h3>
+        <ul id="ledger-info" class="verify-checklist" role="list"></ul>
+      </div>
+
+      <p id="receipt-meta" class="verify-meta"></p>
+    </section>
+
+    <footer class="verify-footer">
+      <p>verify.nexqloud.io · Wasm verifier · Ed25519 + AMD SEV-SNP + Sigstore Rekor</p>
+      <div class="verify-footer__health">
+        <span class="verify-footer__health-dot" aria-hidden="true"></span>
+        <span>All Systems Normal</span>
+      </div>
+    </footer>
+  </div>
+
+  <script src="wasm_exec.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
