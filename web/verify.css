@@ -1,4 +1,130 @@
-/* verify.nexqloud.io — page styles (tokens only; link design-system/styles.css first) */
+/* verify.nexqloud.io — self-contained styles (tokens inlined from DCP design reference) */
+
+@import url("https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+:root {
+  --black-1: #171717;
+  --grey-1: #747474;
+  --grey-2: #888888;
+  --lightgrey-1: #dcdcdc;
+  --lightgrey-2: #e6e6e6;
+  --whitesmoke-1: #fafafa;
+  --white: #ffffff;
+  --blue-1: #0a70cd;
+  --blue-2: #2a91ef;
+  --lightblue-1: #c2e2ff;
+  --brand-0: #191ad3;
+  --brand-1: #4647ff;
+  --lightbrand-1: #e6e6ff;
+  --green-1: #267800;
+  --lightgreen-1: #eff7eb;
+  --red-1: #7d2222;
+  --shadow-1: rgba(0, 0, 0, 0.04);
+  --shadow-2: rgba(0, 0, 0, 0.16);
+
+  --app-bg: var(--whitesmoke-1);
+  --surface-card: var(--white);
+  --surface-tint: var(--lightbrand-1);
+  --text-primary: var(--black-1);
+  --text-secondary: var(--grey-1);
+  --text-muted: var(--grey-2);
+  --text-link: var(--blue-1);
+  --border-subtle: var(--lightgrey-2);
+  --brand: var(--brand-1);
+  --forms-input-fill: var(--white);
+  --forms-input-value: var(--black-1);
+  --forms-input-placeholder: var(--grey-2);
+  --forms-input-border: var(--lightgrey-1);
+  --forms-input-border-focus: var(--blue-2);
+  --forms-input-border-outline: var(--lightblue-1);
+  --success-fg: var(--green-1);
+  --success-bg: var(--lightgreen-1);
+  --danger-fg: var(--red-1);
+  --danger-bg: #fbeaea;
+  --status-online: var(--green-1);
+
+  --font-sans: "Lexend", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --fw-light: 300;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --text-xs: 11px;
+  --lh-xs: 16px;
+  --text-sm: 12.85px;
+  --lh-sm: 18px;
+  --text-base: 14px;
+  --lh-base: 22px;
+  --text-lg: 18px;
+  --lh-lg: 26px;
+  --text-2xl: 30px;
+  --lh-2xl: 38px;
+  --tracking-tight: -0.02em;
+  --tracking-wide: 0.04em;
+  --tracking-caps: 0.06em;
+  --type-mono: var(--fw-medium) var(--text-sm) / var(--lh-sm) var(--font-mono);
+
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-8: 24px;
+  --space-9: 32px;
+  --space-10: 40px;
+  --space-11: 48px;
+  --space-12: 64px;
+  --radius-md: 6px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+  --control-h: 36px;
+  --field-pad-x: 14px;
+  --elev-1: 0 2px 4px 0 var(--shadow-1);
+  --elev-2: 0 4px 12px 0 var(--shadow-1), 0 1px 2px 0 var(--shadow-1);
+  --elev-3: 0 8px 24px -4px var(--shadow-2), 0 2px 6px -2px var(--shadow-1);
+  --inset-hairline: inset 0 0 0 1px var(--lightgrey-2);
+  --focus-ring: 0 0 0 3px var(--forms-input-border-outline);
+  --ease-standard: cubic-bezier(0.2, 0, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 260ms;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  font: var(--fw-regular) var(--text-base) / var(--lh-base) var(--font-sans);
+  color: var(--text-primary);
+  background: var(--app-bg);
+}
+
+h1, h2, h3, p {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+}
+
+img, svg {
+  display: block;
+  max-width: 100%;
+}
+
+code {
+  font-family: var(--font-mono);
+}
 
 .verify-page {
   min-height: 100vh;
