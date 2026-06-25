@@ -1,4 +1,4 @@
-.PHONY: all wasm wasm_exec web clean
+.PHONY: all wasm wasm_exec clean
 
 GO_ROOT := $(shell go env GOROOT)
 
