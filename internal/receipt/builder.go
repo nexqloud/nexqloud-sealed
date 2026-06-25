@@ -1,10 +1,7 @@
-//go:build !(js && wasm)
-
 package receipt
 
 import (
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -29,8 +26,9 @@ const (
 )
 
 type Input struct {
-	Prompt   string
-	Response string
+	Prompt         string
+	Response       string
+	ChallengeNonce string
 }
 
 type Builder struct {
@@ -43,8 +41,8 @@ func NewBuilder(priv ed25519.PrivateKey, pub ed25519.PublicKey) *Builder {
 }
 
 func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
-	nonce := make([]byte, 32)
-	if _, err := rand.Read(nonce); err != nil {
+	nonce, nonceHex, err := resolveNonce(in.ChallengeNonce)
+	if err != nil {
 		return nil, err
 	}
 
@@ -79,7 +77,7 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		GPUPolicyHash:      policyHash,
 		ZeroizationCert:    gpu.RequestZeroization(),
 		IdentityClaimHash:  dummyIdentityClaim,
-		Nonce:              hex.EncodeToString(nonce),
+		Nonce:              nonceHex,
 	}
 
 	pkgMap, err := packageMap(pkg)
@@ -162,10 +160,10 @@ func buildAzureRuntimeClaims(pub ed25519.PublicKey, nonce []byte) ([]byte, error
 }
 
 func attestationJSON(att *sevsnp.Attestation) (json.RawMessage, error) {
-	if att == nil {
+	if att == nil || att.Report == nil {
 		return json.RawMessage("{}"), nil
 	}
-	raw, err := protojson.Marshal(att)
+	raw, err := protojson.Marshal(&sevsnp.Attestation{Report: att.Report})
 	if err != nil {
 		return nil, err
 	}
