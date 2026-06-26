@@ -5,13 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>NexQloud Sealed — Receipt Verifier</title>
   <link rel="icon" href="assets/logos/nexqloud-mark.svg" type="image/svg+xml" />
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem('nexqloud-verify-theme');
+        var dark = stored === 'dark' || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+      } catch (e) {}
+    })();
+  </script>
   <link rel="stylesheet" href="verify.css" />
 </head>
 <body class="verify-page">
   <div class="verify-shell">
     <header class="verify-header">
       <div class="verify-brand">
-        <img class="verify-brand__wordmark" src="assets/logos/nexqloud-wordmark-light.svg" alt="nexqloud" height="22" />
+        <img class="verify-brand__wordmark" src="assets/logos/nexqloud-wordmark-light.svg" data-src-light="assets/logos/nexqloud-wordmark-light.svg" data-src-dark="assets/logos/nexqloud-wordmark-dark.svg" alt="nexqloud" height="22" />
       </div>
 
       <div class="verify-eyebrow">
@@ -99,6 +108,22 @@
       <div class="verify-footer__health">
         <span class="verify-footer__health-dot" aria-hidden="true"></span>
         <span>All Systems Normal</span>
+        <button type="button" id="theme-toggle" class="verify-theme-toggle" aria-label="Switch to dark mode" title="Dark mode">
+          <svg class="verify-theme-toggle__icon verify-theme-toggle__icon--light" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/>
+          </svg>
+          <svg class="verify-theme-toggle__icon verify-theme-toggle__icon--dark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2"/>
+            <path d="M12 20v2"/>
+            <path d="m4.93 4.93 1.41 1.41"/>
+            <path d="m17.66 17.66 1.41 1.41"/>
+            <path d="M2 12h2"/>
+            <path d="M20 12h2"/>
+            <path d="m6.34 17.66-1.41 1.41"/>
+            <path d="m19.07 4.93-1.41 1.41"/>
+          </svg>
+        </button>
       </div>
     </footer>
   </div>

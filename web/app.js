@@ -136,6 +136,45 @@ let openHelpTopic = null;
 
 const LEGEND_HELP_ICON = `<svg class="verify-advanced__legend-help-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.25"/><path d="M6.2 6.1c.2-1.1 1.1-1.8 2.3-1.8 1.3 0 2.2.7 2.2 1.8 0 .8-.4 1.2-1.1 1.6-.7.4-.9.7-.9 1.3V9.2M8 11.4h.01" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></svg>`;
 
+const THEME_STORAGE_KEY = 'nexqloud-verify-theme';
+
+function getStoredTheme() {
+  try {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored === 'light' || stored === 'dark') return stored;
+  } catch (_) {}
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function applyTheme(theme) {
+  const isDark = theme === 'dark';
+  document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch (_) {}
+
+  const toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.setAttribute('aria-label', isDark ? 'Switch to light mode' : 'Switch to dark mode');
+    toggle.setAttribute('title', isDark ? 'Light mode' : 'Dark mode');
+  }
+
+  const wordmark = document.querySelector('.verify-brand__wordmark');
+  if (wordmark) {
+    wordmark.src = isDark ? wordmark.dataset.srcDark : wordmark.dataset.srcLight;
+  }
+}
+
+function setupThemeToggle() {
+  applyTheme(getStoredTheme());
+  const toggle = document.getElementById('theme-toggle');
+  if (!toggle) return;
+  toggle.addEventListener('click', () => {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    applyTheme(isDark ? 'light' : 'dark');
+  });
+}
+
 async function initWasm() {
   const go = new Go();
   const response = await fetch('main.wasm');
@@ -943,6 +982,7 @@ function setupDropZone() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  setupThemeToggle();
   setupDropZone();
   setupViewMode();
   setStatus('Loading WebAssembly verifier…');

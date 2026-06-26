@@ -522,6 +522,52 @@ code {
   flex: none;
 }
 
+.verify-theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: var(--space-1);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex: none;
+  transition:
+    color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+
+.verify-theme-toggle:hover {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+}
+
+.verify-theme-toggle:focus-visible {
+  outline: 2px solid var(--forms-input-border-focus);
+  outline-offset: 2px;
+}
+
+.verify-theme-toggle__icon {
+  width: 16px;
+  height: 16px;
+}
+
+.verify-theme-toggle__icon--dark {
+  display: none;
+}
+
+:root[data-theme="dark"] .verify-theme-toggle__icon--light {
+  display: none;
+}
+
+:root[data-theme="dark"] .verify-theme-toggle__icon--dark {
+  display: block;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -955,3 +1001,150 @@ code {
 .verify-advanced__legend-swatch--ledger { background: #0a70cd; }
 .verify-advanced__legend-swatch--signed_only { background: #888888; }
 .verify-advanced__legend-swatch--unused { background: #b45309; }
+
+/* Dark mode */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --white: #242424;
+  --whitesmoke-1: #1a1a1a;
+  --lightgrey-1: #3a3a3a;
+  --lightgrey-2: #2e2e2e;
+  --lightbrand-1: #2a2a4a;
+  --lightgreen-1: #1a2e14;
+  --lightblue-1: #1e3a52;
+  --shadow-1: rgba(0, 0, 0, 0.35);
+  --shadow-2: rgba(0, 0, 0, 0.55);
+
+  --app-bg: #121212;
+  --surface-card: #1c1c1c;
+  --surface-tint: #252538;
+  --text-primary: #f0f0f0;
+  --text-secondary: #a8a8a8;
+  --text-muted: #8a8a8a;
+  --text-link: #6eb5ff;
+  --border-subtle: #2e2e2e;
+  --brand: #7b7cff;
+  --forms-input-fill: #1a1a1a;
+  --forms-input-value: #f0f0f0;
+  --forms-input-placeholder: #6a6a6a;
+  --forms-input-border: #3a3a3a;
+  --forms-input-border-focus: #6eb5ff;
+  --forms-input-border-outline: #1a3a5c;
+  --success-fg: #7ddc5a;
+  --success-bg: #1a2e14;
+  --skipped-fg: #a8a8a8;
+  --skipped-bg: #2a2a2a;
+  --danger-fg: #f09090;
+  --danger-bg: #2e1a1a;
+  --status-online: #7ddc5a;
+  --inset-hairline: inset 0 0 0 1px #2e2e2e;
+  --blue-1: #6eb5ff;
+  --blue-2: #8ec5ff;
+  --green-1: #7ddc5a;
+}
+
+:root[data-theme="dark"] .receipt-lit--num,
+:root[data-theme="dark"] .receipt-lit--bool {
+  color: #e0a84a;
+}
+
+:root[data-theme="dark"] .receipt-row--topic-signature,
+:root[data-theme="dark"] .receipt-field[data-topic="signature"],
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="signature"] .receipt-row--match,
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="signature"] .receipt-field--pinned {
+  --row-hl-accent: #6eb5ff;
+  --row-hl-bg: #1a2a3a;
+  --hl-accent: #6eb5ff;
+  --hl-bg: #1a2a3a;
+}
+
+:root[data-theme="dark"] .receipt-row--topic-hardware,
+:root[data-theme="dark"] .receipt-field[data-topic="hardware"],
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="hardware"] .receipt-row--match,
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="hardware"] .receipt-field--pinned {
+  --row-hl-accent: #7ddc5a;
+  --row-hl-bg: #1a2a1a;
+  --hl-accent: #7ddc5a;
+  --hl-bg: #1a2a1a;
+}
+
+:root[data-theme="dark"] .receipt-row--topic-key_binding,
+:root[data-theme="dark"] .receipt-field[data-topic="key_binding"],
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="key_binding"] .receipt-row--match,
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="key_binding"] .receipt-field--pinned {
+  --row-hl-accent: #b49aff;
+  --row-hl-bg: #2a2240;
+  --hl-accent: #b49aff;
+  --hl-bg: #2a2240;
+}
+
+:root[data-theme="dark"] .receipt-row--topic-code_legit,
+:root[data-theme="dark"] .receipt-field[data-topic="code_legit"],
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="code_legit"] .receipt-row--match,
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="code_legit"] .receipt-field--pinned {
+  --row-hl-accent: #e0a84a;
+  --row-hl-bg: #2a2418;
+  --hl-accent: #e0a84a;
+  --hl-bg: #2a2418;
+}
+
+:root[data-theme="dark"] .receipt-row--topic-model_legit,
+:root[data-theme="dark"] .receipt-field[data-topic="model_legit"],
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="model_legit"] .receipt-row--match,
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="model_legit"] .receipt-field--pinned {
+  --row-hl-accent: #5ec9bc;
+  --row-hl-bg: #1a2a28;
+  --hl-accent: #5ec9bc;
+  --hl-bg: #1a2a28;
+}
+
+:root[data-theme="dark"] .receipt-row--topic-gpu_wiped,
+:root[data-theme="dark"] .receipt-field[data-topic="gpu_wiped"],
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="gpu_wiped"] .receipt-row--match,
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="gpu_wiped"] .receipt-field--pinned {
+  --row-hl-accent: #f09090;
+  --row-hl-bg: #2a1a1a;
+  --hl-accent: #f09090;
+  --hl-bg: #2a1a1a;
+}
+
+:root[data-theme="dark"] .receipt-row--topic-freshness,
+:root[data-theme="dark"] .receipt-field[data-topic="freshness"],
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="freshness"] .receipt-row--match,
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="freshness"] .receipt-field--pinned {
+  --row-hl-accent: #a8a8a8;
+  --row-hl-bg: #252525;
+  --hl-accent: #a8a8a8;
+  --hl-bg: #252525;
+}
+
+:root[data-theme="dark"] .receipt-row--topic-ledger,
+:root[data-theme="dark"] .receipt-field[data-topic="ledger"],
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="ledger"] .receipt-row--match,
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="ledger"] .receipt-field--pinned {
+  --row-hl-accent: #6eb5ff;
+  --row-hl-bg: #1a2a3a;
+  --hl-accent: #6eb5ff;
+  --hl-bg: #1a2a3a;
+}
+
+:root[data-theme="dark"] .receipt-row--topic-signed_only,
+:root[data-theme="dark"] .receipt-field[data-topic="signed_only"],
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="signed_only"] .receipt-row--match,
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="signed_only"] .receipt-field--pinned {
+  --row-hl-accent: #9a9a9a;
+  --row-hl-bg: #222222;
+  --hl-accent: #9a9a9a;
+  --hl-bg: #222222;
+}
+
+:root[data-theme="dark"] .receipt-row--topic-unused,
+:root[data-theme="dark"] .receipt-field[data-topic="unused_chain"],
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="unused_chain"] .receipt-row--match,
+:root[data-theme="dark"] .receipt-doc[data-focus-topic="unused_chain"] .receipt-field--pinned {
+  --row-hl-accent: #e0a84a;
+  --row-hl-bg: #2a2218;
+  --hl-accent: #e0a84a;
+  --hl-bg: #2a2218;
+}
