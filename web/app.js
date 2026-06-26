@@ -22,7 +22,119 @@ const ICON_PASS = `<svg class="verify-check__icon verify-check__icon--pass" view
 const ICON_FAIL = `<svg class="verify-check__icon verify-check__icon--fail" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M6.2 6.2l5.6 5.6M11.8 6.2l-5.6 5.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
 const ICON_SKIPPED = `<svg class="verify-check__icon verify-check__icon--skipped" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="8" stroke="currentColor" stroke-width="1.5"/><circle cx="9" cy="5.4" r="0.85" fill="currentColor"/><path d="M9 7.8V13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
 
+const RECEIPT_TOPICS = [
+  {
+    id: 'signature',
+    checkId: 'signature_valid',
+    swatchClass: 'signature',
+    label: 'Signature Valid',
+    description: 'Ed25519 signature over the RFC 8785 canonical package, verified with pubkey.',
+    fieldHint: 'Look for "signature", "pubkey", and all fields inside "package".',
+    plainEnglish: 'The secure enclave signed the receipt claims with its private key. We verify that signature using the public key in the receipt, so you know nobody changed the package after it was signed.',
+  },
+  {
+    id: 'hardware',
+    checkId: 'hardware_genuine',
+    swatchClass: 'hardware',
+    label: 'Hardware Genuine',
+    description: 'AMD SEV-SNP report plus cert_chain (VCEK → ASK → ARK).',
+    fieldHint: 'Look for "cert_chain" and key fields inside "attestation.report".',
+    plainEnglish: 'This proves the attestation came from real AMD silicon. We validate the certificate chain from the CPU up to AMD root keys, and confirm the hardware report was signed by that CPU.',
+  },
+  {
+    id: 'unused_chain',
+    checkId: null,
+    swatchClass: 'unused',
+    label: 'Unused duplicate chain',
+    description: 'Not used by the verifier — cert_chain is authoritative.',
+    fieldHint: 'Hidden "certificateChain" block (expand to inspect).',
+    plainEnglish: 'A second copy of the certificates nested inside attestation. The verifier only uses the top-level cert_chain field, so editing this hidden copy alone would not fail verification.',
+    statusOverride: 'info',
+  },
+  {
+    id: 'key_binding',
+    checkId: 'key_binding',
+    swatchClass: 'key_binding',
+    label: 'Key Bound to Silicon',
+    description: 'Links pubkey + nonce into hardware attestation (reportData or Azure user-data).',
+    fieldHint: 'Look for "reportData" and "runtime_claims_json.user-data".',
+    plainEnglish: 'This checks that the signing key really lived inside that specific CPU enclave. The hardware attestation must include a fingerprint of the public key combined with the session nonce.',
+  },
+  {
+    id: 'code_legit',
+    checkId: 'code_legit',
+    swatchClass: 'code_legit',
+    label: 'Code Legit',
+    description: 'Enclave measurement compared to verifier allowlist.',
+    fieldHint: 'Look for "enclave_measurement" inside package.',
+    plainEnglish: 'Confirms the enclave was running approved software. The enclave_measurement value is compared against a list of known-good builds that this verifier trusts.',
+  },
+  {
+    id: 'model_legit',
+    checkId: 'model_legit',
+    swatchClass: 'model_legit',
+    label: 'Model Legit',
+    description: 'Model commitment hash compared to catalog.',
+    fieldHint: 'Look for "model_commitment" inside package.',
+    plainEnglish: 'Confirms which AI model produced the result. The model_commitment hash is checked against an allowed model catalog so only approved models pass.',
+  },
+  {
+    id: 'gpu_wiped',
+    checkId: 'gpu_wiped',
+    swatchClass: 'gpu_wiped',
+    label: 'GPU Wiped',
+    description: 'GPU isolation policy hash and zeroization certificate.',
+    fieldHint: 'Look for "gpu_policy_hash" and "zeroization_cert" inside package.',
+    plainEnglish: 'Checks that GPU memory was wiped and isolation rules were enforced before inference. We compare the policy hash and wipe certificate against expected values.',
+  },
+  {
+    id: 'freshness',
+    checkId: 'freshness',
+    swatchClass: 'freshness',
+    label: 'Freshness',
+    description: 'Session nonce — compared to your challenge input when supplied.',
+    fieldHint: 'Look for "nonce" inside package.',
+    plainEnglish: 'If you paste a challenge nonce, we check it matches the nonce in the receipt. That shows this response was made for your session, not copied from an older one. Without a challenge, we only confirm a nonce exists.',
+  },
+  {
+    id: 'signed_only',
+    checkId: null,
+    swatchClass: 'signed_only',
+    label: 'Signed only',
+    description: 'Integrity via signature, not independently validated.',
+    fieldHint: 'Look for schema, receipt_id, timestamp, prompt/response hashes, identity_claim_hash.',
+    plainEnglish: 'These fields are covered by the enclave signature — tampering would break the signature — but the verifier does not re-check them against external data (for example, your original prompt).',
+    statusOverride: 'info',
+  },
+  {
+    id: 'ledger',
+    checkId: null,
+    swatchClass: 'ledger',
+    label: 'Public Ledger',
+    description: 'Sigstore Rekor transparency log index (browser lookup).',
+    fieldHint: 'Look for "log_index" at the root.',
+    plainEnglish: 'An optional lookup in Sigstore\'s public transparency log. It shows when this receipt was publicly recorded, separate from the cryptographic checks above.',
+    statusOverride: 'ledger',
+  },
+];
+
+const TRUNCATE_LEN = 52;
+const REPORT_HIGHLIGHT_KEYS = ['chipId', 'reportData', 'measurement', 'signature'];
+const ROOT_KEY_ORDER = ['package', 'signature', 'pubkey', 'attestation', 'cert_chain', 'runtime_claims_json', 'log_index'];
+const DEFAULT_COLLAPSED = ['attestation.certificateChain', 'attestation.report.__other__'];
+
 let wasmReady = false;
+let viewMode = 'simple';
+let lastReceipt = null;
+let lastRenderContext = null;
+let expandedPaths = new Set();
+let collapsedSections = new Set(DEFAULT_COLLAPSED);
+let receiptHoverBound = false;
+let receiptLineNum = 0;
+let pinnedTopic = null;
+let openHelpTopic = null;
+
+const LEGEND_HELP_ICON = `<svg class="verify-advanced__legend-help-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.25"/><path d="M6.2 6.1c.2-1.1 1.1-1.8 2.3-1.8 1.3 0 2.2.7 2.2 1.8 0 .8-.4 1.2-1.1 1.6-.7.4-.9.7-.9 1.3V9.2M8 11.4h.01" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></svg>`;
 
 async function initWasm() {
   const go = new Go();
@@ -65,6 +177,500 @@ function truncateHex(s) {
   const clean = s.replace(/^sha256:/, '');
   if (clean.length <= 16) return clean;
   return `${clean.slice(0, 8)}…${clean.slice(-8)}`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function truncateMiddle(value, max = TRUNCATE_LEN) {
+  if (value.length <= max) return value;
+  const head = Math.ceil((max - 1) / 2);
+  const tail = Math.floor((max - 1) / 2);
+  return `${value.slice(0, head)}…${value.slice(-tail)}`;
+}
+
+function topicForPath(path) {
+  if (!path) return null;
+  if (path === 'signature' || path === 'pubkey' || path === 'package') return 'signature';
+  if (path.startsWith('cert_chain')) return 'hardware';
+  if (path.startsWith('attestation.certificateChain')) return 'unused_chain';
+  if (path === 'attestation' || path === 'attestation.report') return 'hardware';
+  if (path.startsWith('attestation.report.')) {
+    const key = path.split('.').pop();
+    if (REPORT_HIGHLIGHT_KEYS.includes(key)) return key === 'reportData' ? 'key_binding' : 'hardware';
+  }
+  if (path === 'package.nonce') return 'freshness';
+  if (path === 'package.enclave_measurement') return 'code_legit';
+  if (path === 'package.model_commitment') return 'model_legit';
+  if (path === 'package.gpu_policy_hash' || path.startsWith('package.zeroization_cert')) return 'gpu_wiped';
+  if (path.startsWith('runtime_claims_json')) return 'key_binding';
+  if (path === 'log_index') return 'ledger';
+  if (
+    path === 'package.schema' ||
+    path === 'package.receipt_id' ||
+    path === 'package.timestamp' ||
+    path === 'package.prompt_hash' ||
+    path === 'package.response_hash' ||
+    path === 'package.identity_claim_hash'
+  ) {
+    return 'signed_only';
+  }
+  return null;
+}
+
+function collectTopicsFromReceipt(receipt) {
+  const topics = new Set();
+  const walk = (value, path) => {
+    const topic = topicForPath(path);
+    if (topic) topics.add(topic);
+    if (value && typeof value === 'object') {
+      if (Array.isArray(value)) {
+        value.forEach((item, i) => walk(item, `${path}[${i}]`));
+      } else {
+        Object.keys(value).forEach((key) => walk(value[key], path ? `${path}.${key}` : key));
+      }
+    }
+  };
+  walk(receipt, '');
+  return topics;
+}
+
+function indent(depth) {
+  return '  '.repeat(depth);
+}
+
+function fieldAttrs(path) {
+  const topic = topicForPath(path);
+  let attrs = ` class="receipt-field" data-path="${escapeHtml(path)}"`;
+  if (topic) attrs += ` data-topic="${topic}"`;
+  if (path === 'package' || path.startsWith('package.')) attrs += ' data-in-package="true"';
+  return attrs;
+}
+
+function emitLine(innerHtml, depth, topic = null) {
+  receiptLineNum += 1;
+  const rowClass = topic ? ` receipt-row--topic-${topic}` : '';
+  const topicAttr = topic ? ` data-row-topic="${topic}"` : '';
+  return `<div class="receipt-row${rowClass}" data-line="${receiptLineNum}"${topicAttr}>
+    <span class="receipt-ln">${receiptLineNum}</span>
+    <div class="receipt-line" style="--depth:${depth}">${innerHtml}</div>
+  </div>`;
+}
+
+function rowTopicForPath(path) {
+  return topicForPath(path);
+}
+
+function renderPrimitive(value, path) {
+  if (value === null) {
+    return `<span class="receipt-lit receipt-lit--null">null</span>`;
+  }
+  if (typeof value === 'boolean') {
+    return `<span class="receipt-lit receipt-lit--bool">${value}</span>`;
+  }
+  if (typeof value === 'number') {
+    return `<span class="receipt-lit receipt-lit--num">${value}</span>`;
+  }
+  if (typeof value === 'string') {
+    const expanded = expandedPaths.has(path);
+    const isLong = value.length > TRUNCATE_LEN;
+    const showTrunc = isLong && !expanded;
+    const display = showTrunc ? truncateMiddle(value) : value;
+    const attrs = fieldAttrs(path);
+    let toggleBtn = '';
+    if (isLong) {
+      if (expanded) {
+        toggleBtn = ` <button type="button" class="receipt-expand" data-collapse-value-path="${escapeHtml(path)}" title="Hide full value">hide</button>`;
+      } else {
+        toggleBtn = ` <button type="button" class="receipt-expand" data-expand-path="${escapeHtml(path)}" title="Show full value">show</button>`;
+      }
+    }
+    return `<span${attrs}><span class="receipt-lit receipt-lit--str">"${escapeHtml(display)}"</span></span>${toggleBtn}`;
+  }
+  return escapeHtml(String(value));
+}
+
+function renderCollapsedBanner(label, path, depth, meta, topic = null) {
+  const isOpen = !collapsedSections.has(path);
+  const rowTopic = topic || topicForPath(path);
+  return emitLine(`<button type="button" class="receipt-collapse-btn" data-collapse-path="${escapeHtml(path)}" aria-expanded="${isOpen}">
+      <span class="receipt-key">"${escapeHtml(label)}"</span><span class="receipt-punct">: </span>
+      <span class="receipt-collapse-meta">{ ${escapeHtml(meta)} }</span>
+      <span class="receipt-collapse-chevron">${isOpen ? '▾' : '▸'}</span>
+    </button>`, depth, rowTopic);
+}
+
+function renderObjectEntries(obj, path, depth, keys) {
+  const lines = [];
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    const childPath = path ? `${path}.${key}` : key;
+    const comma = i < keys.length - 1 ? '<span class="receipt-punct">,</span>' : '';
+    const keyTopic = topicForPath(childPath);
+    const keyAttrs = keyTopic ? ` class="receipt-key receipt-field" data-path="${escapeHtml(childPath)}" data-topic="${keyTopic}"` : ` class="receipt-key"`;
+
+    if (path === 'attestation' && key === 'certificateChain') {
+      const isOpen = !collapsedSections.has(childPath);
+      lines.push(renderCollapsedBanner('certificateChain', childPath, depth + 1, 'duplicate certs · not verified', 'unused_chain'));
+      if (isOpen) {
+        lines.push(`<div class="receipt-block receipt-block--nested" data-collapse-body="${escapeHtml(childPath)}">`);
+        lines.push(emitLine('<span class="receipt-punct">{</span>', depth + 1, 'unused_chain'));
+        lines.push(renderObject(obj[key], childPath, depth + 2));
+        lines.push(emitLine(`<span class="receipt-punct">}</span>${comma}`, depth + 1, 'unused_chain'));
+        lines.push('</div>');
+      }
+      continue;
+    }
+
+    if (path === 'attestation.report' && key === '__other__') {
+      continue;
+    }
+
+    const value = obj[key];
+    const rowTopic = rowTopicForPath(childPath);
+    if (value !== null && typeof value === 'object') {
+      lines.push(emitLine(`<span${keyAttrs}>"${escapeHtml(key)}"</span><span class="receipt-punct">: </span><span class="receipt-punct">{</span>`, depth + 1, rowTopic));
+      lines.push(renderObject(value, childPath, depth + 2));
+      lines.push(emitLine(`<span class="receipt-punct">}</span>${comma}`, depth + 1, rowTopic));
+    } else {
+      lines.push(emitLine(`<span${keyAttrs}>"${escapeHtml(key)}"</span><span class="receipt-punct">: </span>${renderPrimitive(value, childPath)}${comma}`, depth + 1, rowTopic));
+    }
+  }
+  return lines.join('');
+}
+
+function objectKeysForPath(obj, path) {
+  if (!path) return ROOT_KEY_ORDER.filter((k) => k in obj);
+  if (path === 'attestation') {
+    const keys = [];
+    if ('report' in obj) keys.push('report');
+    if ('certificateChain' in obj) keys.push('certificateChain');
+    for (const k of Object.keys(obj)) {
+      if (!keys.includes(k)) keys.push(k);
+    }
+    return keys;
+  }
+  if (path === 'attestation.report') {
+    return REPORT_HIGHLIGHT_KEYS.filter((k) => k in obj);
+  }
+  return Object.keys(obj);
+}
+
+function renderObject(obj, path, depth) {
+  if (Array.isArray(obj)) {
+    const items = obj.map((item, i) => {
+      const childPath = `${path}[${i}]`;
+      const inner = item !== null && typeof item === 'object'
+        ? `<span class="receipt-punct">{</span>${renderObject(item, childPath, depth + 1)}<span class="receipt-punct">}</span>`
+        : renderPrimitive(item, childPath);
+      return emitLine(`${inner}<span class="receipt-punct">,</span>`, depth, rowTopicForPath(childPath));
+    });
+    return items.join('');
+  }
+
+  let html = renderObjectEntries(obj, path, depth, objectKeysForPath(obj, path));
+
+  if (path === 'attestation.report') {
+    const hiddenKeys = Object.keys(obj).filter((k) => !REPORT_HIGHLIGHT_KEYS.includes(k));
+    if (hiddenKeys.length > 0) {
+      const hiddenObj = {};
+      for (const k of hiddenKeys) hiddenObj[k] = obj[k];
+      const otherPath = `${path}.__other__`;
+      const isOpen = !collapsedSections.has(otherPath);
+      const comma = '';
+      html += renderCollapsedBanner('…', otherPath, depth + 1, `${hiddenKeys.length} other report fields`, 'hardware');
+      if (isOpen) {
+        html += `<div class="receipt-block receipt-block--nested" data-collapse-body="${escapeHtml(otherPath)}">`;
+        html += emitLine('<span class="receipt-punct">{</span>', depth + 1, 'hardware');
+        html += renderObjectEntries(hiddenObj, otherPath, depth + 2, Object.keys(hiddenObj));
+        html += emitLine(`<span class="receipt-punct">}</span>${comma}`, depth + 1, 'hardware');
+        html += '</div>';
+      }
+    }
+  }
+
+  return html;
+}
+
+function renderReceiptDocument(receipt) {
+  receiptLineNum = 0;
+  return `<div class="receipt-doc">${emitLine('<span class="receipt-punct">{</span>', 0)}${renderObject(receipt, '', 0)}${emitLine('<span class="receipt-punct">}</span>', 0)}</div>`;
+}
+
+function resetExplorerState() {
+  expandedPaths = new Set();
+  collapsedSections = new Set(DEFAULT_COLLAPSED);
+  pinnedTopic = null;
+  openHelpTopic = null;
+}
+
+function closeLegendHelp() {
+  openHelpTopic = null;
+  document.querySelectorAll('.verify-advanced__legend-help-popup').forEach((el) => {
+    el.hidden = true;
+  });
+  document.querySelectorAll('.verify-advanced__legend-help').forEach((btn) => {
+    btn.setAttribute('aria-expanded', 'false');
+  });
+}
+
+function toggleLegendHelp(topicId) {
+  if (openHelpTopic === topicId) {
+    closeLegendHelp();
+    return;
+  }
+  closeLegendHelp();
+  openHelpTopic = topicId;
+  const popup = document.querySelector(`.verify-advanced__legend-help-popup[data-help-topic="${topicId}"]`);
+  const btn = document.querySelector(`.verify-advanced__legend-help[data-help-topic="${topicId}"]`);
+  if (popup) popup.hidden = false;
+  if (btn) btn.setAttribute('aria-expanded', 'true');
+}
+
+function checkStatusForTopic(topic, checksById, challengeHex) {
+  if (topic.statusOverride) return topic.statusOverride;
+  if (!topic.checkId) return 'info';
+  const check = checksById[topic.checkId];
+  if (!check) return 'info';
+  if (topic.checkId === 'freshness' && challengeHex === '') return 'skipped';
+  return check.ok ? 'pass' : 'fail';
+}
+
+function statusLabel(status) {
+  switch (status) {
+    case 'pass': return 'Pass';
+    case 'fail': return 'Fail';
+    case 'skipped': return 'Skipped';
+    case 'ledger': return 'Rekor';
+    default: return 'Info';
+  }
+}
+
+function highlightLegendTopic(topicId) {
+  document.querySelectorAll('.verify-advanced__legend-item').forEach((el) => {
+    const id = el.dataset.topic;
+    el.classList.toggle('verify-advanced__legend-item--selected', pinnedTopic === id);
+    el.classList.toggle('verify-advanced__legend-item--linked', Boolean(topicId && topicId === id && pinnedTopic !== id));
+  });
+}
+
+function topicMeta(topicId) {
+  return RECEIPT_TOPICS.find((t) => t.id === topicId);
+}
+
+function rowMatchesTopic(row, topicId) {
+  if (!topicId) return true;
+  if (topicId === 'signature') {
+    return row.querySelector('[data-topic="signature"], [data-in-package="true"]');
+  }
+  if (row.dataset.rowTopic === topicId) return true;
+  return row.querySelector(`[data-topic="${topicId}"]`);
+}
+
+function fieldsForTopic(jsonEl, topicId) {
+  if (topicId === 'signature') {
+    return jsonEl.querySelectorAll('[data-topic="signature"], [data-in-package="true"]');
+  }
+  return jsonEl.querySelectorAll(`[data-topic="${topicId}"]`);
+}
+
+function updateFocusHint(topicId) {
+  const hint = document.getElementById('advanced-focus-hint');
+  if (!hint) return;
+  if (!topicId) {
+    hint.hidden = true;
+    hint.textContent = '';
+    return;
+  }
+  const meta = topicMeta(topicId);
+  hint.hidden = false;
+  hint.textContent = meta?.fieldHint || '';
+}
+
+function applyTopicFocus(topicId) {
+  const jsonEl = document.getElementById('advanced-json');
+  const doc = jsonEl.querySelector('.receipt-doc');
+  doc?.classList.toggle('receipt-doc--focused', Boolean(topicId));
+  if (doc) {
+    if (topicId) doc.dataset.focusTopic = topicId;
+    else delete doc.dataset.focusTopic;
+  }
+
+  jsonEl.querySelectorAll('.receipt-row').forEach((row) => {
+    const match = rowMatchesTopic(row, topicId);
+    row.classList.toggle('receipt-row--match', Boolean(topicId && match));
+    row.classList.toggle('receipt-row--dimmed', Boolean(topicId && !match));
+  });
+
+  jsonEl.querySelectorAll('.receipt-field--pinned').forEach((el) => {
+    el.classList.remove('receipt-field--pinned');
+  });
+
+  if (!topicId) return;
+
+  const fields = fieldsForTopic(jsonEl, topicId);
+  fields.forEach((el) => {
+    el.classList.add('receipt-field--pinned');
+  });
+}
+
+function focusTopic(topicId) {
+  pinnedTopic = pinnedTopic === topicId ? null : topicId;
+  highlightLegendTopic(null);
+  updateFocusHint(pinnedTopic);
+  applyTopicFocus(pinnedTopic);
+
+  if (!pinnedTopic) return;
+
+  const jsonEl = document.getElementById('advanced-json');
+  const first = fieldsForTopic(jsonEl, pinnedTopic)[0];
+  if (first) {
+    const row = first.closest('.receipt-row');
+    (row || first).scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+}
+
+function renderAdvancedLegend(checksById, challengeHex, presentTopicIds) {
+  const legend = document.getElementById('advanced-legend');
+  legend.innerHTML = '';
+
+  for (const topic of RECEIPT_TOPICS) {
+    if (!presentTopicIds.has(topic.id)) continue;
+
+    const status = checkStatusForTopic(topic, checksById, challengeHex);
+    const li = document.createElement('li');
+    const item = document.createElement('div');
+    item.className = 'verify-advanced__legend-item';
+    item.dataset.topic = topic.id;
+    item.innerHTML = `
+      <div class="verify-advanced__legend-head">
+        <span class="verify-advanced__legend-swatch verify-advanced__legend-swatch--${topic.swatchClass}"></span>
+        <span class="verify-advanced__legend-label">${topic.label}</span>
+        <button type="button" class="verify-advanced__legend-help" data-help-topic="${topic.id}" aria-expanded="false" aria-label="Explain ${topic.label}">${LEGEND_HELP_ICON}</button>
+        <span class="verify-advanced__legend-status verify-advanced__legend-status--${status}">${statusLabel(status)}</span>
+      </div>
+      <p class="verify-advanced__legend-desc">${topic.description}</p>
+      <div class="verify-advanced__legend-help-popup" data-help-topic="${topic.id}" hidden>${escapeHtml(topic.plainEnglish || topic.description)}</div>
+    `;
+    li.appendChild(item);
+    legend.appendChild(li);
+  }
+}
+
+function renderAdvancedExplorer(receipt, context) {
+  const { checksById, challengeHex } = context;
+  closeLegendHelp();
+  const jsonEl = document.getElementById('advanced-json');
+  jsonEl.innerHTML = renderReceiptDocument(receipt);
+  renderAdvancedLegend(checksById, challengeHex, collectTopicsFromReceipt(receipt));
+  highlightLegendTopic(null);
+  updateFocusHint(pinnedTopic);
+  applyTopicFocus(pinnedTopic);
+  bindReceiptExplorerEvents(jsonEl);
+}
+
+function scrollToTopic(topicId) {
+  focusTopic(topicId);
+}
+
+function bindReceiptExplorerEvents(jsonEl) {
+  if (receiptHoverBound) return;
+  receiptHoverBound = true;
+
+  jsonEl.addEventListener('mouseover', (e) => {
+    const field = e.target.closest('[data-topic]');
+    if (field) highlightLegendTopic(field.dataset.topic);
+  });
+
+  jsonEl.addEventListener('mouseout', (e) => {
+    const next = e.relatedTarget;
+    if (!next || !jsonEl.contains(next) || !next.closest?.('[data-topic]')) {
+      highlightLegendTopic(null);
+    }
+  });
+
+  jsonEl.addEventListener('click', (e) => {
+    const expandBtn = e.target.closest('[data-expand-path]');
+    if (expandBtn) {
+      e.preventDefault();
+      expandedPaths.add(expandBtn.dataset.expandPath);
+      if (lastReceipt && lastRenderContext) renderAdvancedExplorer(lastReceipt, lastRenderContext);
+      return;
+    }
+
+    const collapseValueBtn = e.target.closest('[data-collapse-value-path]');
+    if (collapseValueBtn) {
+      e.preventDefault();
+      expandedPaths.delete(collapseValueBtn.dataset.collapseValuePath);
+      if (lastReceipt && lastRenderContext) renderAdvancedExplorer(lastReceipt, lastRenderContext);
+      return;
+    }
+
+    const collapseBtn = e.target.closest('[data-collapse-path]');
+    if (collapseBtn) {
+      e.preventDefault();
+      const path = collapseBtn.dataset.collapsePath;
+      if (collapsedSections.has(path)) collapsedSections.delete(path);
+      else collapsedSections.add(path);
+      if (lastReceipt && lastRenderContext) renderAdvancedExplorer(lastReceipt, lastRenderContext);
+      return;
+    }
+
+    if (!e.target.closest('[data-topic], .receipt-expand, .receipt-collapse-btn')) {
+      pinnedTopic = null;
+      highlightLegendTopic(null);
+      updateFocusHint(null);
+      applyTopicFocus(null);
+    }
+  });
+
+  document.getElementById('advanced-legend').addEventListener('click', (e) => {
+    if (e.target.closest('.verify-advanced__legend-help')) {
+      e.stopPropagation();
+      const btn = e.target.closest('.verify-advanced__legend-help');
+      toggleLegendHelp(btn.dataset.helpTopic);
+      return;
+    }
+    if (e.target.closest('.verify-advanced__legend-help-popup')) return;
+    const item = e.target.closest('[data-topic]');
+    if (item) focusTopic(item.dataset.topic);
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.verify-advanced__legend-help, .verify-advanced__legend-help-popup')) {
+      closeLegendHelp();
+    }
+  });
+}
+
+function setViewMode(mode) {
+  viewMode = mode;
+  const simplePanel = document.getElementById('simple-panel');
+  const advancedSection = document.getElementById('advanced-section');
+  const simpleBtn = document.getElementById('mode-simple');
+  const advancedBtn = document.getElementById('mode-advanced');
+
+  simpleBtn.classList.toggle('verify-mode__btn--active', mode === 'simple');
+  advancedBtn.classList.toggle('verify-mode__btn--active', mode === 'advanced');
+  simpleBtn.setAttribute('aria-pressed', mode === 'simple' ? 'true' : 'false');
+  advancedBtn.setAttribute('aria-pressed', mode === 'advanced' ? 'true' : 'false');
+
+  simplePanel.hidden = mode !== 'simple';
+  advancedSection.hidden = mode !== 'advanced';
+
+  if (mode === 'advanced' && lastReceipt && lastRenderContext) {
+    renderAdvancedExplorer(lastReceipt, lastRenderContext);
+  }
+}
+
+function setupViewMode() {
+  document.getElementById('mode-simple').addEventListener('click', () => setViewMode('simple'));
+  document.getElementById('mode-advanced').addEventListener('click', () => setViewMode('advanced'));
 }
 
 function renderFreshnessCheck(check, challengeHex) {
@@ -258,6 +864,7 @@ async function handleFile(file) {
 
   hideStatus();
   const challenge = document.getElementById('challenge-input').value.trim();
+  lastReceipt = receipt;
   renderResults(wasmResult, rekorInfo, rekorError, challenge);
 }
 
@@ -295,6 +902,14 @@ function renderResults(result, rekorInfo, rekorError = null, challengeHex = '') 
   if (result.receipt_id) {
     meta.textContent = `receipt_id: ${result.receipt_id}`;
   }
+
+  const checksById = Object.fromEntries(result.checks.map((c) => [c.id, c]));
+  lastRenderContext = { checksById, challengeHex, result, rekorInfo, rekorError };
+  resetExplorerState();
+
+  if (viewMode === 'advanced') {
+    renderAdvancedExplorer(lastReceipt, lastRenderContext);
+  }
 }
 
 function setupDropZone() {
@@ -329,6 +944,7 @@ function setupDropZone() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   setupDropZone();
+  setupViewMode();
   setStatus('Loading WebAssembly verifier…');
   try {
     await initWasm();

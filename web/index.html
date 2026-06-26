@@ -53,17 +53,45 @@
 
     <section id="results" class="verify-results" hidden>
       <div class="verify-results__head">
-        <h2 class="verify-section-label">Verification Checks</h2>
+        <div class="verify-results__head-left">
+          <h2 class="verify-section-label">Verification Checks</h2>
+          <div class="verify-mode" role="group" aria-label="Results view mode">
+            <button type="button" id="mode-simple" class="verify-mode__btn verify-mode__btn--active" aria-pressed="true">Simple</button>
+            <button type="button" id="mode-advanced" class="verify-mode__btn" aria-pressed="false">Advanced</button>
+          </div>
+        </div>
         <span id="overall-badge" class="verify-badge"></span>
       </div>
-      <ul id="checklist" class="verify-checklist" role="list"></ul>
+      <div id="simple-panel">
+        <ul id="checklist" class="verify-checklist" role="list"></ul>
 
-      <div id="ledger-section" class="verify-ledger" hidden>
-        <h3 class="verify-section-label">Public Ledger</h3>
-        <ul id="ledger-info" class="verify-checklist" role="list"></ul>
+        <div id="ledger-section" class="verify-ledger" hidden>
+          <h3 class="verify-section-label">Public Ledger</h3>
+          <ul id="ledger-info" class="verify-checklist" role="list"></ul>
+        </div>
+
+        <p id="receipt-meta" class="verify-meta"></p>
       </div>
 
-      <p id="receipt-meta" class="verify-meta"></p>
+      <section id="advanced-section" class="verify-advanced" hidden>
+        <div class="verify-advanced__intro">
+          <h3 class="verify-section-label">Receipt JSON Explorer</h3>
+          <p class="verify-advanced__lede">
+            Hover highlighted fields in the receipt to see which verification check they map to.
+            Long values and unused sections stay collapsed until you expand them.
+          </p>
+        </div>
+        <div class="verify-advanced__layout">
+          <aside class="verify-advanced__legend-wrap">
+            <p class="verify-advanced__legend-title">Field guide</p>
+            <p id="advanced-focus-hint" class="verify-advanced__focus-hint" hidden></p>
+            <ul id="advanced-legend" class="verify-advanced__legend" role="list"></ul>
+          </aside>
+          <div class="verify-advanced__json-wrap">
+            <div id="advanced-json" class="verify-advanced__json" tabindex="0" aria-label="Annotated receipt JSON"></div>
+          </div>
+        </div>
+      </section>
     </section>
 
     <footer class="verify-footer">
