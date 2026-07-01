@@ -18,12 +18,15 @@ func TestVerifyDerivationReceipt(t *testing.T) {
 	}
 
 	attRaw := json.RawMessage(`{"report":{"version":2,"reportData":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}`)
-	sum := sha256.Sum256(attRaw)
+	sum, err := attestationProtoDigest(attRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tenantSum := sha256.Sum256([]byte("acme"))
 	pkg := map[string]any{
 		"schema":           receipt.DerivationSchema,
 		"operator_id":      "operator-a",
-		"attestation_hash": "sha256:" + hex.EncodeToString(sum[:]),
+		"attestation_hash": "sha256:" + hex.EncodeToString(sum),
 		"tenant_id_hash":   "sha256:" + hex.EncodeToString(tenantSum[:]),
 		"key_version":      1,
 		"timestamp":        "2026-07-01T00:00:00Z",

@@ -17,6 +17,10 @@ func TestDerivationReceiptPackageFields(t *testing.T) {
 	}
 
 	att := []byte(`{"report":{"version":2}}`)
+	attHash, err := attestationDigest(att)
+	if err != nil {
+		t.Fatal(err)
+	}
 	nonce := make([]byte, 32)
 	if _, err := rand.Read(nonce); err != nil {
 		t.Fatal(err)
@@ -25,7 +29,7 @@ func TestDerivationReceiptPackageFields(t *testing.T) {
 	pkg := map[string]any{
 		"schema":           DerivationSchema,
 		"operator_id":      "operator-a",
-		"attestation_hash": digestBytes(att),
+		"attestation_hash": attHash,
 		"tenant_id_hash":   digestBytes([]byte("acme")),
 		"key_version":      1,
 		"timestamp":        "2026-07-01T00:00:00Z",
@@ -59,7 +63,7 @@ func TestDerivationReceiptPackageFields(t *testing.T) {
 	if pkg["operator_id"] != "operator-a" {
 		t.Fatalf("operator_id = %v", pkg["operator_id"])
 	}
-	if pkg["attestation_hash"] != digestBytes(att) {
+	if pkg["attestation_hash"] != attHash {
 		t.Fatalf("attestation_hash = %v", pkg["attestation_hash"])
 	}
 	if pkg["tenant_id_hash"] != digestBytes([]byte("acme")) {

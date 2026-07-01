@@ -965,11 +965,10 @@ function hideStatus() {
   document.getElementById('status').hidden = true;
 }
 
-async function runWasmVerify(receipt) {
+async function runWasmVerify(receiptJSON) {
   if (!wasmReady) throw new Error('Wasm module not loaded');
 
   const challenge = document.getElementById('challenge-input').value.trim();
-  const receiptJSON = JSON.stringify(receipt);
   const resultJSON = globalThis.verifyReceipt(receiptJSON, challenge);
   const result = JSON.parse(resultJSON);
 
@@ -997,7 +996,7 @@ async function handleFile(file) {
   setStatus('Running cryptographic verification in WebAssembly…');
   let wasmResult;
   try {
-    wasmResult = await runWasmVerify(receipt);
+    wasmResult = await runWasmVerify(text);
   } catch (err) {
     alert(`Verification error: ${err.message}`);
     hideStatus();

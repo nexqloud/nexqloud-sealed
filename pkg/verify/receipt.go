@@ -225,8 +225,12 @@ func checkDerivationAttestationHash(pkg map[string]any, attRaw json.RawMessage) 
 		return check
 	}
 
-	sum := sha256.Sum256(attRaw)
-	actual := "sha256:" + hex.EncodeToString(sum[:])
+	sum, err := attestationProtoDigest(attRaw)
+	if err != nil {
+		check.Detail = err.Error()
+		return check
+	}
+	actual := "sha256:" + hex.EncodeToString(sum)
 	if actual == expected {
 		check.OK = true
 		check.Detail = "attestation bytes match package hash"
@@ -285,6 +289,25 @@ func checkDerivationTenantHash(pkg map[string]any) Check {
 
 func stringsHasPrefix(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
+func attestationProtoDigest(attRaw json.RawMessage) ([]byte, error) {
+	if len(attRaw) == 0 || string(attRaw) == "{}" {
+		return nil, fmt.Errorf("missing attestation")
+	}
+
+	att := &sevsnp.Attestation{}
+	if err := protojson.Unmarshal(attRaw, att); err != nil {
+		return nil, fmt.Errorf("parse attestation: %w", err)
+	}
+
+	canonical, err := protojson.Marshal(att)
+	if err != nil {
+		return nil, fmt.Errorf("marshal attestation: %w", err)
+	}
+
+	sum := sha256.Sum256(canonical)
+	return sum[:], nil
 }
 
 func pickHardwareRoots(att *sevsnp.Attestation, catalog map[string]HardwareRoots) iv.HardwareRoots {
