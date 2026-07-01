@@ -8,6 +8,11 @@ import (
 	"github.com/google/go-sev-guest/proto/sevsnp"
 )
 
+const (
+	InferenceSchema  = "sealed-receipt/1"
+	DerivationSchema = "sealed-derivation/1"
+)
+
 type Package struct {
 	Schema             string         `json:"schema"`
 	ReceiptID          string         `json:"receipt_id"`

@@ -3,6 +3,7 @@ package verify
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
@@ -35,21 +36,24 @@ type Check struct {
 }
 
 type ReceiptResult struct {
-	OverallOK bool    `json:"overall_ok"`
-	Checks    []Check `json:"checks"`
-	LogIndex  string  `json:"log_index"`
-	ReceiptID string  `json:"receipt_id"`
-	Error     string  `json:"error,omitempty"`
+	OverallOK  bool    `json:"overall_ok"`
+	Checks     []Check `json:"checks"`
+	LogIndex   string  `json:"log_index"`
+	ReceiptID  string  `json:"receipt_id"`
+	Schema     string  `json:"schema,omitempty"`
+	OperatorID string  `json:"operator_id,omitempty"`
+	Error      string  `json:"error,omitempty"`
 }
 
 type ReceiptFile struct {
-	Package           map[string]any        `json:"package"`
-	Signature         string                `json:"signature"`
-	Pubkey            string                `json:"pubkey"`
-	Attestation       json.RawMessage       `json:"attestation"`
+	Package           map[string]any           `json:"package"`
+	Signature         string                   `json:"signature"`
+	Pubkey            string                   `json:"pubkey"`
+	Attestation       json.RawMessage          `json:"attestation"`
 	CertChain         receipt.CertificateChain `json:"cert_chain"`
-	RuntimeClaimsJSON json.RawMessage       `json:"runtime_claims_json"`
-	LogIndex          string                `json:"log_index"`
+	RuntimeClaimsJSON json.RawMessage          `json:"runtime_claims_json"`
+	Nonce             string                   `json:"nonce"`
+	LogIndex          string                   `json:"log_index"`
 }
 
 func VerifyReceiptJSON(receiptJSON []byte, challengeHex string, rootsCatalog map[string]HardwareRoots) ReceiptResult {
@@ -60,7 +64,22 @@ func VerifyReceiptJSON(receiptJSON []byte, challengeHex string, rootsCatalog map
 	return VerifyReceipt(wrapper, challengeHex, rootsCatalog)
 }
 
+func packageSchema(pkg map[string]any) string {
+	if pkg == nil {
+		return ""
+	}
+	schema, _ := pkg["schema"].(string)
+	return schema
+}
+
 func VerifyReceipt(wrapper ReceiptFile, challengeHex string, rootsCatalog map[string]HardwareRoots) ReceiptResult {
+	if packageSchema(wrapper.Package) == receipt.DerivationSchema {
+		return verifyDerivationReceipt(wrapper, challengeHex, rootsCatalog)
+	}
+	return verifyInferenceReceipt(wrapper, challengeHex, rootsCatalog)
+}
+
+func verifyInferenceReceipt(wrapper ReceiptFile, challengeHex string, rootsCatalog map[string]HardwareRoots) ReceiptResult {
 	result := ReceiptResult{
 		LogIndex: wrapper.LogIndex,
 	}
@@ -117,6 +136,155 @@ func VerifyReceipt(wrapper ReceiptFile, challengeHex string, rootsCatalog map[st
 	}
 
 	return result
+}
+
+func verifyDerivationReceipt(wrapper ReceiptFile, challengeHex string, rootsCatalog map[string]HardwareRoots) ReceiptResult {
+	result := ReceiptResult{
+		LogIndex: wrapper.LogIndex,
+		Schema:   receipt.DerivationSchema,
+	}
+
+	if wrapper.Package == nil {
+		result.Error = "missing package"
+		return result
+	}
+
+	if opID, ok := wrapper.Package["operator_id"].(string); ok {
+		result.OperatorID = opID
+	}
+
+	pub, err := hex.DecodeString(wrapper.Pubkey)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		result.Error = "invalid pubkey"
+		return result
+	}
+	publicKey := ed25519.PublicKey(pub)
+
+	nonceHex := wrapper.Nonce
+	if nonceHex == "" {
+		nonceHex, _ = wrapper.Package["nonce"].(string)
+	}
+	nonce, err := hex.DecodeString(nonceHex)
+	if err != nil || len(nonce) != 32 {
+		result.Error = "invalid nonce"
+		return result
+	}
+
+	att := &sevsnp.Attestation{}
+	if len(wrapper.Attestation) > 0 && string(wrapper.Attestation) != "{}" {
+		if err := protojson.Unmarshal(wrapper.Attestation, att); err != nil {
+			result.Error = fmt.Sprintf("parse attestation: %v", err)
+			return result
+		}
+	}
+
+	chain := resolveCertChain(wrapper.CertChain, att)
+	roots := pickHardwareRoots(att, rootsCatalog)
+
+	result.Checks = append(result.Checks,
+		checkSignature(wrapper, publicKey),
+		checkHardware(att, chain, roots),
+		checkKeyBinding(att, chain, publicKey, nonce, wrapper.RuntimeClaimsJSON),
+		checkDerivationAttestationHash(wrapper.Package, wrapper.Attestation),
+		checkDerivationOperatorID(wrapper.Package),
+		checkDerivationKeyVersion(wrapper.Package),
+		checkDerivationTenantHash(wrapper.Package),
+	)
+
+	result.OverallOK = true
+	for _, c := range result.Checks {
+		if !c.OK {
+			result.OverallOK = false
+			break
+		}
+	}
+
+	return result
+}
+
+func resolveCertChain(chain receipt.CertificateChain, att *sevsnp.Attestation) receipt.CertificateChain {
+	if chain.VCEK != "" {
+		return chain
+	}
+	if att != nil && att.CertificateChain != nil {
+		return receipt.EncodeCertificateChain(att.CertificateChain)
+	}
+	return chain
+}
+
+func checkDerivationAttestationHash(pkg map[string]any, attRaw json.RawMessage) Check {
+	check := Check{
+		ID:    "derivation_attestation_hash",
+		Label: "Attestation Hash",
+	}
+
+	expected, _ := pkg["attestation_hash"].(string)
+	check.Hash = truncateHex(stringsTrimPrefix(expected, "sha256:"))
+	if expected == "" {
+		check.Detail = "missing attestation_hash"
+		return check
+	}
+
+	sum := sha256.Sum256(attRaw)
+	actual := "sha256:" + hex.EncodeToString(sum[:])
+	if actual == expected {
+		check.OK = true
+		check.Detail = "attestation bytes match package hash"
+	} else {
+		check.Detail = "attestation_hash mismatch"
+	}
+	return check
+}
+
+func checkDerivationOperatorID(pkg map[string]any) Check {
+	check := Check{
+		ID:    "derivation_operator_id",
+		Label: "Operator ID",
+	}
+	opID, _ := pkg["operator_id"].(string)
+	if opID == "" {
+		check.Detail = "missing operator_id"
+		return check
+	}
+	check.OK = true
+	check.Hash = truncateHex(opID)
+	check.Detail = opID
+	return check
+}
+
+func checkDerivationKeyVersion(pkg map[string]any) Check {
+	check := Check{
+		ID:    "derivation_key_version",
+		Label: "Key Version",
+	}
+	version, ok := pkg["key_version"].(float64)
+	if !ok || version <= 0 {
+		check.Detail = "missing or invalid key_version"
+		return check
+	}
+	check.OK = true
+	check.Detail = fmt.Sprintf("v%d", int(version))
+	return check
+}
+
+func checkDerivationTenantHash(pkg map[string]any) Check {
+	check := Check{
+		ID:    "derivation_tenant_hash",
+		Label: "Tenant ID Hash",
+	}
+	tenantHash, _ := pkg["tenant_id_hash"].(string)
+	if tenantHash == "" || !stringsHasPrefix(tenantHash, "sha256:") {
+		check.Detail = "missing or invalid tenant_id_hash"
+		return check
+	}
+	check.OK = true
+	check.Hash = truncateHex(stringsTrimPrefix(tenantHash, "sha256:"))
+	check.Detail = tenantHash
+	return check
+}
+
+func stringsHasPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }
 
 func pickHardwareRoots(att *sevsnp.Attestation, catalog map[string]HardwareRoots) iv.HardwareRoots {

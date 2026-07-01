@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"flag"
@@ -62,12 +63,17 @@ func main() {
 		log.Fatalf("write %s: %v", *stateFile, err)
 	}
 
-	attBytes, err := operatorAttestation()
+	priv, pub, err := enclave.Key()
+	if err != nil {
+		log.Fatalf("enclave key: %v", err)
+	}
+
+	attBytes, nonce, err := operatorAttestation(pub)
 	if err != nil {
 		log.Fatalf("attestation: %v", err)
 	}
 
-	rcpt := receipt.DerivationReceipt(operatorID, attBytes, tenantID, keyVersion)
+	rcpt := receipt.DerivationReceipt(priv, pub, operatorID, attBytes, tenantID, keyVersion, nonce)
 	receiptJSON, err := json.MarshalIndent(rcpt, "", "  ")
 	if err != nil {
 		log.Fatalf("marshal receipt: %v", err)
@@ -119,18 +125,18 @@ func federationAttestBind(claimHash []byte) []byte {
 	return append([]byte("sealed-federation/v1/"), claimHash...)
 }
 
-func operatorAttestation() ([]byte, error) {
-	_, pub, err := enclave.Key()
-	if err != nil {
-		return nil, err
-	}
+func operatorAttestation(pub ed25519.PublicKey) ([]byte, []byte, error) {
 	nonce := make([]byte, 32)
 	if _, err := rand.Read(nonce); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	att, err := enclave.RequestReport(pub, nonce)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return protojson.Marshal(att)
+	attBytes, err := protojson.Marshal(att)
+	if err != nil {
+		return nil, nil, err
+	}
+	return attBytes, nonce, nil
 }

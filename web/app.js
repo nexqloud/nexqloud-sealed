@@ -6,6 +6,10 @@ const CHECK_LABELS = {
   model_legit: 'Model Legit',
   gpu_wiped: 'GPU Wiped',
   freshness: 'Freshness',
+  derivation_operator_id: 'Operator ID',
+  derivation_attestation_hash: 'Attestation Hash',
+  derivation_tenant_hash: 'Tenant ID Hash',
+  derivation_key_version: 'Key Version',
 };
 
 const CHECK_HINTS = {
@@ -21,6 +25,92 @@ const CHECK_HINTS = {
 const ICON_PASS = `<svg class="verify-check__icon verify-check__icon--pass" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 9.2l2.1 2.1 4.9-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const ICON_FAIL = `<svg class="verify-check__icon verify-check__icon--fail" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M6.2 6.2l5.6 5.6M11.8 6.2l-5.6 5.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
 const ICON_SKIPPED = `<svg class="verify-check__icon verify-check__icon--skipped" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="8" stroke="currentColor" stroke-width="1.5"/><circle cx="9" cy="5.4" r="0.85" fill="currentColor"/><path d="M9 7.8V13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+
+const DERIVATION_RECEIPT_TOPICS = [
+  {
+    id: 'signature',
+    checkId: 'signature_valid',
+    swatchClass: 'signature',
+    label: 'Signature Valid',
+    description: 'Ed25519 signature over the RFC 8785 canonical package, verified with pubkey.',
+    fieldHint: 'Look for "signature", "pubkey", and all fields inside "package".',
+    plainEnglish: 'The sealing operator signed the derivation claims with its enclave private key. We verify that signature using the public key in the receipt.',
+  },
+  {
+    id: 'hardware',
+    checkId: 'hardware_genuine',
+    swatchClass: 'hardware',
+    label: 'Hardware Genuine',
+    description: 'AMD SEV-SNP report plus cert_chain (VCEK → ASK → ARK).',
+    fieldHint: 'Look for "cert_chain" and key fields inside "attestation.report".',
+    plainEnglish: 'This proves the derivation attestation came from real AMD silicon with a validated certificate chain.',
+  },
+  {
+    id: 'key_binding',
+    checkId: 'key_binding',
+    swatchClass: 'key_binding',
+    label: 'Key Bound to Silicon',
+    description: 'Links pubkey + nonce into hardware attestation reportData.',
+    fieldHint: 'Look for "reportData" and root-level "nonce".',
+    plainEnglish: 'Confirms the signing key used for the derivation receipt was bound into the hardware attestation.',
+  },
+  {
+    id: 'derivation_operator',
+    checkId: 'derivation_operator_id',
+    swatchClass: 'derivation',
+    label: 'Operator ID',
+    description: 'Federated operator that performed key derivation.',
+    fieldHint: 'Look for "operator_id" inside package.',
+    plainEnglish: 'Identifies which federation operator (for example operator-a) created this derivation receipt.',
+  },
+  {
+    id: 'derivation_attestation',
+    checkId: 'derivation_attestation_hash',
+    swatchClass: 'derivation',
+    label: 'Attestation Hash',
+    description: 'SHA-256 of the attestation bytes, committed in the signed package.',
+    fieldHint: 'Look for "attestation_hash" inside package.',
+    plainEnglish: 'Binds the signed package to the exact hardware attestation blob included in the receipt.',
+  },
+  {
+    id: 'derivation_tenant',
+    checkId: 'derivation_tenant_hash',
+    swatchClass: 'derivation',
+    label: 'Tenant ID Hash',
+    description: 'SHA-256 commitment to the tenant identifier.',
+    fieldHint: 'Look for "tenant_id_hash" inside package.',
+    plainEnglish: 'Shows which tenant federation context this derivation belongs to, without revealing the raw tenant ID.',
+  },
+  {
+    id: 'derivation_key_version',
+    checkId: 'derivation_key_version',
+    swatchClass: 'derivation',
+    label: 'Key Version',
+    description: 'Federation key version used during derivation.',
+    fieldHint: 'Look for "key_version" inside package.',
+    plainEnglish: 'Records which key version was active when the operator derived the sealing key.',
+  },
+  {
+    id: 'signed_only',
+    checkId: null,
+    swatchClass: 'signed_only',
+    label: 'Signed only',
+    description: 'Integrity via signature, not independently validated.',
+    fieldHint: 'Look for schema and timestamp inside package.',
+    plainEnglish: 'These fields are covered by the enclave signature but are not checked against external catalogs.',
+    statusOverride: 'info',
+  },
+  {
+    id: 'ledger',
+    checkId: null,
+    swatchClass: 'ledger',
+    label: 'Public Ledger',
+    description: 'Sigstore Rekor transparency log index (browser lookup).',
+    fieldHint: 'Look for "log_index" at the root.',
+    plainEnglish: 'An optional lookup in Sigstore\'s public transparency log for when this derivation receipt was recorded.',
+    statusOverride: 'ledger',
+  },
+];
 
 const RECEIPT_TOPICS = [
   {
@@ -120,7 +210,7 @@ const RECEIPT_TOPICS = [
 
 const TRUNCATE_LEN = 52;
 const REPORT_HIGHLIGHT_KEYS = ['chipId', 'reportData', 'measurement', 'signature'];
-const ROOT_KEY_ORDER = ['package', 'signature', 'pubkey', 'attestation', 'cert_chain', 'runtime_claims_json', 'log_index'];
+const ROOT_KEY_ORDER = ['package', 'signature', 'pubkey', 'attestation', 'cert_chain', 'runtime_claims_json', 'nonce', 'log_index'];
 const DEFAULT_COLLAPSED = ['attestation.certificateChain', 'attestation.report.__other__'];
 
 let wasmReady = false;
@@ -233,8 +323,33 @@ function truncateMiddle(value, max = TRUNCATE_LEN) {
   return `${value.slice(0, head)}…${value.slice(-tail)}`;
 }
 
-function topicForPath(path) {
+function isDerivationReceipt(receipt) {
+  return receipt?.package?.schema === 'sealed-derivation/1';
+}
+
+function topicsForReceipt(receipt) {
+  return isDerivationReceipt(receipt) ? DERIVATION_RECEIPT_TOPICS : RECEIPT_TOPICS;
+}
+
+function topicForPath(path, receipt = lastReceipt) {
   if (!path) return null;
+  if (isDerivationReceipt(receipt)) {
+    if (path === 'signature' || path === 'pubkey' || path === 'package') return 'signature';
+    if (path.startsWith('cert_chain')) return 'hardware';
+    if (path === 'attestation' || path === 'attestation.report') return 'hardware';
+    if (path.startsWith('attestation.report.')) {
+      const key = path.split('.').pop();
+      if (REPORT_HIGHLIGHT_KEYS.includes(key)) return key === 'reportData' ? 'key_binding' : 'hardware';
+    }
+    if (path === 'nonce') return 'key_binding';
+    if (path === 'package.operator_id') return 'derivation_operator';
+    if (path === 'package.attestation_hash') return 'derivation_attestation';
+    if (path === 'package.tenant_id_hash') return 'derivation_tenant';
+    if (path === 'package.key_version') return 'derivation_key_version';
+    if (path === 'package.timestamp' || path === 'package.schema') return 'signed_only';
+    if (path === 'log_index') return 'ledger';
+    return null;
+  }
   if (path === 'signature' || path === 'pubkey' || path === 'package') return 'signature';
   if (path.startsWith('cert_chain')) return 'hardware';
   if (path.startsWith('attestation.certificateChain')) return 'unused_chain';
@@ -265,7 +380,7 @@ function topicForPath(path) {
 function collectTopicsFromReceipt(receipt) {
   const topics = new Set();
   const walk = (value, path) => {
-    const topic = topicForPath(path);
+    const topic = topicForPath(path, receipt);
     if (topic) topics.add(topic);
     if (value && typeof value === 'object') {
       if (Array.isArray(value)) {
@@ -302,7 +417,7 @@ function emitLine(innerHtml, depth, topic = null) {
 }
 
 function rowTopicForPath(path) {
-  return topicForPath(path);
+  return topicForPath(path, lastReceipt);
 }
 
 function renderPrimitive(value, path) {
@@ -499,7 +614,8 @@ function highlightLegendTopic(topicId) {
 }
 
 function topicMeta(topicId) {
-  return RECEIPT_TOPICS.find((t) => t.id === topicId);
+  const topics = topicsForReceipt(lastReceipt);
+  return topics.find((t) => t.id === topicId);
 }
 
 function rowMatchesTopic(row, topicId) {
@@ -574,11 +690,11 @@ function focusTopic(topicId) {
   }
 }
 
-function renderAdvancedLegend(checksById, challengeHex, presentTopicIds) {
+function renderAdvancedLegend(checksById, challengeHex, presentTopicIds, receipt) {
   const legend = document.getElementById('advanced-legend');
   legend.innerHTML = '';
 
-  for (const topic of RECEIPT_TOPICS) {
+  for (const topic of topicsForReceipt(receipt)) {
     if (!presentTopicIds.has(topic.id)) continue;
 
     const status = checkStatusForTopic(topic, checksById, challengeHex);
@@ -606,7 +722,7 @@ function renderAdvancedExplorer(receipt, context) {
   closeLegendHelp();
   const jsonEl = document.getElementById('advanced-json');
   jsonEl.innerHTML = renderReceiptDocument(receipt);
-  renderAdvancedLegend(checksById, challengeHex, collectTopicsFromReceipt(receipt));
+  renderAdvancedLegend(checksById, challengeHex, collectTopicsFromReceipt(receipt), receipt);
   highlightLegendTopic(null);
   updateFocusHint(pinnedTopic);
   applyTopicFocus(pinnedTopic);
@@ -940,6 +1056,22 @@ function renderResults(result, rekorInfo, rekorError = null, challengeHex = '') 
 
   if (result.receipt_id) {
     meta.textContent = `receipt_id: ${result.receipt_id}`;
+  } else if (result.schema === 'sealed-derivation/1' || isDerivationReceipt(lastReceipt)) {
+    const pkg = lastReceipt?.package || {};
+    const parts = [];
+    if (result.operator_id || pkg.operator_id) {
+      parts.push(`operator_id: ${result.operator_id || pkg.operator_id}`);
+    }
+    if (pkg.key_version !== undefined && pkg.key_version !== null) {
+      parts.push(`key_version: ${pkg.key_version}`);
+    }
+    if (pkg.attestation_hash) {
+      parts.push(`attestation_hash: ${truncateHex(pkg.attestation_hash)}`);
+    }
+    if (pkg.tenant_id_hash) {
+      parts.push(`tenant_id_hash: ${truncateHex(pkg.tenant_id_hash)}`);
+    }
+    meta.textContent = parts.join(' · ');
   }
 
   const checksById = Object.fromEntries(result.checks.map((c) => [c.id, c]));
