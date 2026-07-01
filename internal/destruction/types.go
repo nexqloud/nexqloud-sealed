@@ -13,10 +13,11 @@ const (
 )
 
 type Receipt struct {
-	Package     map[string]any           `json:"package"`
-	Signature   string                   `json:"signature"`
-	Pubkey      string                   `json:"pubkey"`
-	Attestation json.RawMessage          `json:"attestation,omitempty"`
-	CertChain   receipt.CertificateChain `json:"cert_chain,omitempty"`
-	Nonce       string                   `json:"nonce,omitempty"`
+	Package           map[string]any           `json:"package"`
+	Signature         string                   `json:"signature"`
+	Pubkey            string                   `json:"pubkey"`
+	Attestation       json.RawMessage          `json:"attestation,omitempty"`
+	CertChain         receipt.CertificateChain `json:"cert_chain,omitempty"`
+	RuntimeClaimsJSON json.RawMessage          `json:"runtime_claims_json,omitempty"`
+	Nonce             string                   `json:"nonce,omitempty"`
 }

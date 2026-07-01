@@ -29,19 +29,11 @@ substep "proof=$PROOF"
 substep "receipts=$RECEIPTS"
 substep "registry=http://${VM1_IP}:7001"
 
-NONCE=""
-if [[ -f "$RUN_DIR/last-nonce" ]]; then
-  NONCE="$(cat "$RUN_DIR/last-nonce")"
-fi
-
 ARGS=(
   -registry "http://${VM1_IP}:7001"
   -tenant "$TENANT_ID"
   -proof "$PROOF"
   -receipts "$RECEIPTS"
 )
-if [[ -n "$NONCE" ]]; then
-  ARGS+=(-challenge "$NONCE")
-fi
 
 (cd "$REPO_ROOT" && go run ./cmd/sealed-verify-deletion/main.go "${ARGS[@]}")

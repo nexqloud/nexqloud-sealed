@@ -57,7 +57,7 @@ func (b *Builder) DerivationReceipt(opID string, attJSON []byte, tenantID string
 
 	certChain := EncodeCertificateChain(att.CertificateChain)
 
-	runtimeClaimsJSON, err := buildAzureRuntimeClaims(b.pub, nonce)
+	runtimeClaimsJSON, err := AzureRuntimeClaims(b.pub, nonce)
 	if err != nil {
 		panic(err)
 	}

@@ -52,7 +52,7 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		return nil, err
 	}
 
-	runtimeClaimsJSON, err := buildAzureRuntimeClaims(b.pub, nonce)
+	runtimeClaimsJSON, err := AzureRuntimeClaims(b.pub, nonce)
 	if err != nil {
 		return nil, err
 	}
@@ -135,17 +135,6 @@ func packageMap(pkg Package) (map[string]any, error) {
 func digest(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
-func buildAzureRuntimeClaims(pub ed25519.PublicKey, nonce []byte) ([]byte, error) {
-	keyHash := enclave.KeyHash(pub, nonce)
-	userData := hex.EncodeToString(keyHash[:])
-	claims := map[string]any{
-		"keys":             []any{},
-		"vm-configuration": map[string]any{},
-		"user-data":        userData,
-	}
-	return Canonicalize(claims)
 }
 
 func attestationJSON(att *sevsnp.Attestation) (json.RawMessage, error) {

@@ -87,6 +87,11 @@ func BuildReceipt(in ReceiptInput) (destruction.Receipt, error) {
 	}
 	if len(in.Nonce) > 0 {
 		rcpt.Nonce = hex.EncodeToString(in.Nonce)
+		runtimeClaims, err := receipt.AzureRuntimeClaims(in.Pub, in.Nonce)
+		if err != nil {
+			return destruction.Receipt{}, fmt.Errorf("runtime claims: %w", err)
+		}
+		rcpt.RuntimeClaimsJSON = json.RawMessage(runtimeClaims)
 	}
 
 	att := &sevsnp.Attestation{}
