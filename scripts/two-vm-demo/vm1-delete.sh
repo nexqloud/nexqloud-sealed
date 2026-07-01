@@ -20,6 +20,13 @@ fi
 # shellcheck disable=SC1090
 source "$RUN_DIR/credentials.env"
 
+export JWKS_URL="${JWKS_URL:-http://${VM1_IP}:7200/.well-known/jwks.json}"
+if ! refresh_customer_jwt "$VM1_IP" "$TENANT_ID" "$RUN_DIR" "$JWKS_URL"; then
+  substep "Could not refresh JWT from mock-idp /token — using $RUN_DIR/credentials.env"
+  # shellcheck disable=SC1090
+  source "$RUN_DIR/credentials.env"
+fi
+
 NONCE="$(openssl rand -hex 16)"
 echo "$NONCE" >"$RUN_DIR/last-nonce"
 CUSTOMER_SIG_B64="$(echo -n "$CUSTOMER_JWT" | base64 -w0 2>/dev/null || echo -n "$CUSTOMER_JWT" | base64)"
@@ -29,9 +36,7 @@ substep "tenant=$TENANT_ID"
 substep "fresh nonce=$NONCE (each delete needs a new nonce)"
 substep "POST http://${VM1_IP}:7003/destructions"
 
-RESP="$(curl -fsS -X POST "http://${VM1_IP}:7003/destructions" \
-  -H 'Content-Type: application/json' \
-  -d "{\"tenant_id\":\"${TENANT_ID}\",\"customer_sig\":\"${CUSTOMER_SIG_B64}\",\"nonce\":\"${NONCE}\"}")"
+RESP="$(post_coordinator_destruction "http://${VM1_IP}:7003/destructions" "$TENANT_ID" "$CUSTOMER_SIG_B64" "$NONCE")"
 
 echo "$RESP" | (command -v jq >/dev/null && jq . || cat)
 

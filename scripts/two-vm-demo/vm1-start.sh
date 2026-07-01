@@ -45,18 +45,21 @@ for _ in $(seq 1 15); do
 done
 
 step "Step 2/6 — Mock IdP (:7200)"
-start_service_or_die mock-idp "$(build_demo_bin mock-idp ./cmd/mock-idp/main.go)" -addr :7200 -tenant "$TENANT_ID"
+start_service_or_die mock-idp "$(build_demo_bin mock-idp ./cmd/mock-idp/main.go)" \
+  -addr :7200 -tenant "$TENANT_ID" -key-file "$RUN_DIR/state/mock-idp.pem"
 sleep 2
-MOCK_LOG="$(log_file mock-idp)"
-CUSTOMER_JWT="$(grep '^CUSTOMER_JWT=' "$MOCK_LOG" | tail -1 | cut -d= -f2- || true)"
-if [[ -z "$CUSTOMER_JWT" ]]; then
-  die "Could not read CUSTOMER_JWT from $MOCK_LOG"
-fi
-cat >"$RUN_DIR/credentials.env" <<EOF
+if ! refresh_customer_jwt "$VM1_IP" "$TENANT_ID" "$RUN_DIR" "$JWKS_URL"; then
+  MOCK_LOG="$(log_file mock-idp)"
+  CUSTOMER_JWT="$(grep '^CUSTOMER_JWT=' "$MOCK_LOG" | tail -1 | cut -d= -f2- || true)"
+  if [[ -z "$CUSTOMER_JWT" ]]; then
+    die "Could not read CUSTOMER_JWT from mock-idp /token or $MOCK_LOG"
+  fi
+  cat >"$RUN_DIR/credentials.env" <<EOF
 JWKS_URL=$JWKS_URL
 CUSTOMER_JWT=$CUSTOMER_JWT
 TENANT_ID=$TENANT_ID
 EOF
+fi
 substep "Saved customer JWT to $RUN_DIR/credentials.env"
 substep "JWKS_URL=$JWKS_URL"
 

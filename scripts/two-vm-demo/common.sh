@@ -271,3 +271,50 @@ save_destruction_receipts() {
     substep "Saved receipts bundle → ${receipts_dir}/all.json (install jq to split per-operator files)"
   fi
 }
+
+refresh_customer_jwt() {
+  local vm1_ip="$1"
+  local tenant_id="$2"
+  local run_dir="$3"
+  local jwks_url="$4"
+  local raw jwt url
+  for url in "http://127.0.0.1:7200/token?tenant=${tenant_id}" "http://${vm1_ip}:7200/token?tenant=${tenant_id}"; do
+    if raw="$(curl -fsS "$url" 2>/dev/null)"; then
+      if command -v jq >/dev/null; then
+        jwt="$(echo "$raw" | jq -r '.jwt')"
+      else
+        jwt="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["jwt"])' <<<"$raw" 2>/dev/null || true)"
+      fi
+      if [[ -n "$jwt" && "$jwt" != "null" ]]; then
+        cat >"${run_dir}/credentials.env" <<EOF
+JWKS_URL=${jwks_url}
+CUSTOMER_JWT=${jwt}
+TENANT_ID=${tenant_id}
+EOF
+        CUSTOMER_JWT="$jwt"
+        substep "Refreshed customer JWT from ${url%%\?*}"
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+post_coordinator_destruction() {
+  local url="$1"
+  local tenant_id="$2"
+  local customer_sig_b64="$3"
+  local nonce="$4"
+  local tmp body code
+  tmp="$(mktemp)"
+  code="$(curl -sS -w '%{http_code}' -o "$tmp" -X POST "$url" \
+    -H 'Content-Type: application/json' \
+    -d "{\"tenant_id\":\"${tenant_id}\",\"customer_sig\":\"${customer_sig_b64}\",\"nonce\":\"${nonce}\"}")"
+  body="$(cat "$tmp")"
+  rm -f "$tmp"
+  if [[ "$code" != "201" ]]; then
+    echo "$body" >&2
+    die "coordinator returned HTTP ${code}: ${body:-<empty body>}"
+  fi
+  echo "$body"
+}
