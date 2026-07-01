@@ -70,12 +70,12 @@ build_demo_bin() {
   ensure_demo_bin_dir
   local out="$DEMO_BIN_DIR/$name"
   if [[ ! -x "$out" ]]; then
-    substep "Building $name → $out"
+    substep "Building $name → $out" >&2
     if ! (cd "$REPO_ROOT" && go build -o "$out" "$pkg_path"); then
       die "go build failed for $name (package $pkg_path)"
     fi
   fi
-  echo "$out"
+  printf '%s\n' "$out"
 }
 
 start_service_or_die() {
@@ -143,6 +143,17 @@ start_service() {
   fi
 
   substep "Starting $name ..."
+  port="$(service_port "$name")"
+  if [[ -n "$port" ]]; then
+    local orphan
+    for orphan in $(pids_on_port "$port"); do
+      substep "Clearing orphan on :$port (pid $orphan) ..."
+      kill "$orphan" 2>/dev/null || true
+      sleep 0.5
+      kill -9 "$orphan" 2>/dev/null || true
+    done
+  fi
+  : >"$log"
   "$@" >>"$log" 2>&1 &
   pid=$!
   echo "$pid" >"$pf"
