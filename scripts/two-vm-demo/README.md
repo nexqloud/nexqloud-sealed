@@ -49,6 +49,11 @@ cp vm2.env.example vm2.env
 ./vm2-stop.sh && ./vm2-start.sh
 ```
 
+`vm1-stop.sh` kills processes by **pid file and listening port**, so orphaned
+`go run` children (from an older script version) are cleaned up too.
+
+If status shows STOPPED but ports are busy, run `./vm1-stop.sh` then `./vm1-start.sh`.
+
 No need to search `ps aux`. Each delete needs a **new nonce** — `vm1-delete.sh` generates one automatically.
 
 ## Ports

@@ -31,7 +31,7 @@ substep "VM1_IP=$VM1_IP  VM2_IP=$VM2_IP"
 substep "Coordinator pubkey: ${COORDINATOR_PUB_HEX:0:16}..."
 
 step "Step 1/6 — Registry (:7001)"
-start_service registry go run ./cmd/registry/main.go
+start_service registry "$(build_demo_bin registry ./cmd/registry/main.go)"
 for _ in $(seq 1 15); do
   code="$(curl -s -o /dev/null -w '%{http_code}' "$REGISTRY_LOCAL/records/${TENANT_ID}" || echo 000)"
   if [[ "$code" == "200" || "$code" == "404" ]]; then
@@ -42,7 +42,7 @@ for _ in $(seq 1 15); do
 done
 
 step "Step 2/6 — Mock IdP (:7200)"
-start_service mock-idp go run ./cmd/mock-idp/main.go -addr :7200 -tenant "$TENANT_ID"
+start_service mock-idp "$(build_demo_bin mock-idp ./cmd/mock-idp/main.go)" -addr :7200 -tenant "$TENANT_ID"
 sleep 2
 MOCK_LOG="$(log_file mock-idp)"
 CUSTOMER_JWT="$(grep '^CUSTOMER_JWT=' "$MOCK_LOG" | tail -1 | cut -d= -f2- || true)"
@@ -63,12 +63,9 @@ if curl -fsS "$REGISTRY_LOCAL/records/${TENANT_ID}" >/dev/null 2>&1; then
 else
   substep "Posting operator-a wrap to registry ..."
   BOOT_LOG="$RUN_DIR/logs/bootstrap.log"
-  (
-    cd "$REPO_ROOT"
-    go run ./cmd/bootstrap/main.go \
-      -registry "$REGISTRY_LOCAL" \
-      -operators operator-a
-  ) 2>&1 | tee "$BOOT_LOG"
+  "$(build_demo_bin bootstrap ./cmd/bootstrap/main.go)" \
+    -registry "$REGISTRY_LOCAL" \
+    -operators operator-a 2>&1 | tee "$BOOT_LOG"
   SEED_LINE="$(grep 'seed-hex' "$BOOT_LOG" || true)"
   if [[ -n "$SEED_LINE" ]]; then
     SEED_HEX="$(echo "$SEED_LINE" | awk '{print $NF}')"
@@ -86,13 +83,13 @@ else
 fi
 
 step "Step 4/6 — Destruction aggregator (:7004)"
-start_service aggregator go run ./cmd/destruction-aggregator/main.go -addr :7004
+start_service aggregator "$(build_demo_bin destruction-aggregator ./cmd/destruction-aggregator/main.go)" -addr :7004
 
 step "Step 5/6 — Destruction coordinator (:7003)"
 OPERATORS="operator-a=http://${VM1_IP}:7101,operator-b=http://${VM2_IP}:7102"
 substep "Operator dispatch map: $OPERATORS"
 substep "Aggregator URL (reachable from VM2): $AGGREGATOR_URL"
-start_service coordinator go run ./cmd/destruction-coordinator/main.go \
+start_service coordinator "$(build_demo_bin destruction-coordinator ./cmd/destruction-coordinator/main.go)" \
   -addr :7003 \
   -registry "$REGISTRY_LOCAL" \
   -aggregator "$AGGREGATOR_URL" \
@@ -101,7 +98,7 @@ start_service coordinator go run ./cmd/destruction-coordinator/main.go \
   -operators "$OPERATORS"
 
 step "Step 6/6 — Operator A TEE (:7101)"
-start_service operator-a go run ./cmd/operator-tee/main.go \
+start_service operator-a "$(build_demo_bin operator-tee ./cmd/operator-tee/main.go)" \
   -operator-id operator-a \
   -addr :7101 \
   -registry "$REGISTRY_LOCAL" \

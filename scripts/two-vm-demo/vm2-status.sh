@@ -10,8 +10,10 @@ load_env "$ENV_FILE"
 RUN_DIR="${RUN_DIR:-/tmp/nexqloud-destruction-demo-vm2}"
 
 step "VM2 destruction demo — status"
+port="$(service_port operator-b)"
 if is_running operator-b; then
-  echo "  RUNNING  operator-b  pid $(cat "$(pid_file operator-b)")  log $(log_file operator-b)"
+  pids="$(running_pids operator-b | tr '\n' ' ' | sed 's/ $//')"
+  echo "  RUNNING  operator-b  pid(s) $pids  :${port}  log $(log_file operator-b)"
 else
-  echo "  STOPPED  operator-b"
+  echo "  STOPPED  operator-b  :${port}"
 fi

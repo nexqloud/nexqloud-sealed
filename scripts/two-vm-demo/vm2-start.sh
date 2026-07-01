@@ -57,7 +57,7 @@ fi
 curl -fsS "$REGISTRY_URL/records/${TENANT_ID}" | (command -v jq >/dev/null && jq '.wraps | keys' || cat)
 
 step "Step 3/3 — Operator B TEE (:7102)"
-start_service operator-b go run ./cmd/operator-tee/main.go \
+start_service operator-b "$(build_demo_bin operator-tee ./cmd/operator-tee/main.go)" \
   -operator-id operator-b \
   -addr :7102 \
   -registry "$REGISTRY_URL" \

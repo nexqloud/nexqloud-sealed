@@ -11,10 +11,14 @@ RUN_DIR="${RUN_DIR:-/tmp/nexqloud-destruction-demo-vm1}"
 
 step "VM1 destruction demo — status"
 for svc in registry mock-idp aggregator coordinator operator-a; do
+  port="$(service_port "$svc")"
   if is_running "$svc"; then
-    echo "  RUNNING  $svc  pid $(cat "$(pid_file "$svc")")  log $(log_file "$svc")"
+    pids="$(running_pids "$svc" | tr '\n' ' ' | sed 's/ $//')"
+    echo "  RUNNING  $svc  pid(s) $pids  :${port}  log $(log_file "$svc")"
+    # refresh pid file to real listener
+    echo "$(running_pids "$svc" | head -1)" >"$(pid_file "$svc")"
   else
-    echo "  STOPPED  $svc"
+    echo "  STOPPED  $svc  :${port}"
   fi
 done
 
