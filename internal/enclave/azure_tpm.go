@@ -9,13 +9,9 @@ import (
 )
 
 const (
-	azureHCLReportNVIndex          = 0x01400001
-	azureReportDataNVIndex         = 0x01400002
-	azureDerivedKeyRequestNVIndex  = 0x01400003
-	azureDerivedKeyResponseNVIndex = 0x01400004
-	azureHCLReportOffset           = 32
-	azureDerivedKeyResponseDataOff = 32
-	azureDerivedKeyResponseSize    = 64
+	azureHCLReportNVIndex  = 0x01400001
+	azureReportDataNVIndex = 0x01400002
+	azureHCLReportOffset   = 32
 )
 
 func openAzureTPM() (transport.TPMCloser, error) {
