@@ -337,6 +337,58 @@ function isDerivationReceipt(receipt) {
   return receipt?.package?.schema === 'sealed-derivation/1';
 }
 
+const RECEIPT_TYPE_INFO = {
+  'sealed-derivation/1': {
+    kind: 'Derivation',
+    accent: 'derivation',
+    title: 'Federation Key Derivation Receipt',
+    subtitle:
+      'Issued once when a federation operator derives sealing keys inside AMD SEV-SNP. Binds operator identity, tenant context, and hardware attestation.',
+  },
+  'sealed-receipt/1': {
+    kind: 'Inference',
+    accent: 'inference',
+    title: 'Sealed Inference Receipt',
+    subtitle:
+      'Issued per inference request. Attests prompt and response hashes, enclave measurement, model commitment, and optional freshness nonce.',
+  },
+};
+
+function receiptTypeInfo(receipt) {
+  const schema = receipt?.package?.schema || '';
+  if (RECEIPT_TYPE_INFO[schema]) {
+    return { schema, ...RECEIPT_TYPE_INFO[schema] };
+  }
+  return {
+    schema: schema || 'unknown',
+    kind: 'Receipt',
+    accent: 'unknown',
+    title: 'Sealed Receipt',
+    subtitle: schema
+      ? `Unrecognized schema "${schema}". Verification may be limited.`
+      : 'No package.schema field found in this file.',
+  };
+}
+
+function renderReceiptTypeBanner(receipt) {
+  const banner = document.getElementById('receipt-type-banner');
+  if (!banner) return;
+
+  const info = receiptTypeInfo(receipt);
+  banner.hidden = false;
+  banner.className = `verify-receipt-type verify-receipt-type--${info.accent}`;
+
+  const kindEl = document.getElementById('receipt-type-kind');
+  const schemaEl = document.getElementById('receipt-type-schema');
+  const titleEl = document.getElementById('receipt-type-title');
+  const subtitleEl = document.getElementById('receipt-type-subtitle');
+
+  if (kindEl) kindEl.textContent = info.kind;
+  if (schemaEl) schemaEl.textContent = info.schema;
+  if (titleEl) titleEl.textContent = info.title;
+  if (subtitleEl) subtitleEl.textContent = info.subtitle;
+}
+
 function topicsForReceipt(receipt) {
   return isDerivationReceipt(receipt) ? DERIVATION_RECEIPT_TOPICS : RECEIPT_TOPICS;
 }
@@ -1039,6 +1091,7 @@ function renderResults(result, rekorInfo, rekorError = null, challengeHex = '') 
   const meta = document.getElementById('receipt-meta');
 
   results.hidden = false;
+  renderReceiptTypeBanner(lastReceipt);
   checklist.innerHTML = '';
 
   for (const check of result.checks) {

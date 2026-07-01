@@ -40,7 +40,7 @@
       <svg class="verify-drop__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 16V4m0 0L8 8m4-4 4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
       </svg>
-      <p class="verify-drop__title">Drop <span class="verify-drop__filename">receipt.json</span> here</p>
+      <p class="verify-drop__title">Drop <span class="verify-drop__filename">receipt.json</span> or <span class="verify-drop__filename">derivation_receipt.json</span> here</p>
       <p class="verify-drop__hint">or click to browse</p>
     </section>
 
@@ -61,6 +61,18 @@
     </div>
 
     <section id="results" class="verify-results" hidden>
+      <div id="receipt-type-banner" class="verify-receipt-type" hidden aria-live="polite">
+        <div class="verify-receipt-type__accent" aria-hidden="true"></div>
+        <div class="verify-receipt-type__body">
+          <div class="verify-receipt-type__top">
+            <span id="receipt-type-kind" class="verify-receipt-type__kind"></span>
+            <code id="receipt-type-schema" class="verify-receipt-type__schema"></code>
+          </div>
+          <h2 id="receipt-type-title" class="verify-receipt-type__title"></h2>
+          <p id="receipt-type-subtitle" class="verify-receipt-type__subtitle"></p>
+        </div>
+      </div>
+
       <div class="verify-results__head">
         <div class="verify-results__head-left">
           <h2 class="verify-section-label">Verification Checks</h2>
