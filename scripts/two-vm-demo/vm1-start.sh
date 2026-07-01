@@ -31,6 +31,7 @@ substep "VM1_IP=$VM1_IP  VM2_IP=$VM2_IP"
 substep "Coordinator pubkey: ${COORDINATOR_PUB_HEX:0:16}..."
 
 ensure_demo_bin_dir
+ensure_demo_bins_current
 substep "DEMO_BIN_DIR=$DEMO_BIN_DIR"
 
 step "Step 1/6 — Registry (:7001)"

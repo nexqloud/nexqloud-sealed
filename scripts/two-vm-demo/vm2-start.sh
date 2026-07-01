@@ -25,6 +25,7 @@ COORDINATOR_PUB_HEX="${COORDINATOR_PUB_HEX:-$(coordinator_pubkey_hex "$COORDINAT
 
 ensure_run_dir
 ensure_demo_bin_dir
+ensure_demo_bins_current
 
 step "VM2 destruction demo — start"
 substep "REPO_ROOT=$REPO_ROOT"

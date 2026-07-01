@@ -64,12 +64,40 @@ ensure_demo_bin_dir() {
   rm -f "$probe"
 }
 
+# Rebuild cached binaries after git pull or script changes.
+ensure_demo_bins_current() {
+  ensure_demo_bin_dir
+  local marker="$DEMO_BIN_DIR/.build-marker"
+  local current=""
+  if current="$(cd "$REPO_ROOT" && git rev-parse HEAD 2>/dev/null)"; then
+    :
+  else
+    current="$(stat -c %Y "$REPO_ROOT/scripts/two-vm-demo/common.sh" 2>/dev/null || echo 0)"
+  fi
+  if [[ ! -f "$marker" ]] || [[ "$(cat "$marker")" != "$current" ]]; then
+    substep "Source changed — clearing cached demo binaries in $DEMO_BIN_DIR"
+    find "$DEMO_BIN_DIR" -maxdepth 1 -type f ! -name '.build-marker' -delete 2>/dev/null || true
+    echo "$current" >"$marker"
+  fi
+}
+
 build_demo_bin() {
   local name="$1"
   local pkg_path="$2"
   ensure_demo_bin_dir
   local out="$DEMO_BIN_DIR/$name"
+  local main_go="$REPO_ROOT/${pkg_path#./}"
+  local pkg_dir
+  pkg_dir="$(dirname "$main_go")"
+  local stale=0
   if [[ ! -x "$out" ]]; then
+    stale=1
+  elif [[ "$main_go" -nt "$out" ]]; then
+    stale=1
+  elif find "$pkg_dir" -name '*.go' -newer "$out" -print -quit 2>/dev/null | grep -q .; then
+    stale=1
+  fi
+  if [[ "$stale" -eq 1 ]]; then
     substep "Building $name → $out" >&2
     if ! (cd "$REPO_ROOT" && go build -o "$out" "$pkg_path"); then
       die "go build failed for $name (package $pkg_path)"
