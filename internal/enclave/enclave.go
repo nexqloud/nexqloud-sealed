@@ -15,6 +15,10 @@ func Key() (ed25519.PrivateKey, ed25519.PublicKey, error) {
 }
 
 func RequestReport(pub ed25519.PublicKey, nonce []byte) (*sevsnp.Attestation, error) {
+	if err := WarmCertificateCache(pub); err != nil {
+		return nil, err
+	}
+
 	att, err := requestHardwareReport(pub, nonce)
 	if err != nil {
 		return nil, err
