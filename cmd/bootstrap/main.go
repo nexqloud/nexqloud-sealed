@@ -34,7 +34,7 @@ func main() {
 		log.Fatalf("chip secret: %v", err)
 	}
 
-	seed, err := loadSeed(*seedHex)
+	seed, generated, err := loadSeed(*seedHex)
 	if err != nil {
 		log.Fatalf("seed: %v", err)
 	}
@@ -64,25 +64,28 @@ func main() {
 	}
 
 	fmt.Printf("posted %s record (key_version=%d) with wraps for %s\n", tenantID, keyVersion, strings.Join(sortedKeys(wraps), ", "))
+	if generated {
+		fmt.Printf("seed-hex (save for other VMs): %s\n", hex.EncodeToString(seed))
+	}
 }
 
-func loadSeed(seedHex string) ([]byte, error) {
+func loadSeed(seedHex string) ([]byte, bool, error) {
 	if seedHex == "" {
 		seed := make([]byte, 32)
 		if _, err := io.ReadFull(rand.Reader, seed); err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		return seed, nil
+		return seed, true, nil
 	}
 
 	seed, err := hex.DecodeString(seedHex)
 	if err != nil {
-		return nil, fmt.Errorf("decode seed-hex: %w", err)
+		return nil, false, fmt.Errorf("decode seed-hex: %w", err)
 	}
 	if len(seed) != 32 {
-		return nil, fmt.Errorf("seed-hex length %d, want 32 bytes", len(seed))
+		return nil, false, fmt.Errorf("seed-hex length %d, want 32 bytes", len(seed))
 	}
-	return seed, nil
+	return seed, false, nil
 }
 
 func postRecord(registryURL string, record registry.CommitmentRecord) error {

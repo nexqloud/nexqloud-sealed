@@ -47,7 +47,10 @@ func (s *server) handleRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.store.Save(record)
+	if err := s.store.Save(record); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
