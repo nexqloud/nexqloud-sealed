@@ -37,6 +37,10 @@ func main() {
 			log.Fatal(err)
 		}
 		receipts, err = loadReceiptsDir(*receiptsDir)
+		if err != nil {
+			log.Fatal(err)
+		}
+		receipts = filterReceiptsForProof(proof, receipts)
 	}
 	if err != nil {
 		log.Fatal(err)
@@ -106,4 +110,24 @@ func loadReceiptsDir(dir string) ([]destruction.Receipt, error) {
 		return nil, fmt.Errorf("no receipt JSON files found in %s", dir)
 	}
 	return receipts, nil
+}
+
+func filterReceiptsForProof(proof destruction.Proof, receipts []destruction.Receipt) []destruction.Receipt {
+	if proof.Package == nil {
+		return receipts
+	}
+	wantID, _ := proof.Package["destruction_id"].(string)
+	if wantID == "" {
+		return receipts
+	}
+	filtered := make([]destruction.Receipt, 0, len(receipts))
+	for _, rcpt := range receipts {
+		if rcpt.DestructionID() == wantID {
+			filtered = append(filtered, rcpt)
+		}
+	}
+	if len(filtered) == 0 {
+		return receipts
+	}
+	return filtered
 }

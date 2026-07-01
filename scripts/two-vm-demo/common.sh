@@ -282,6 +282,7 @@ save_destruction_receipts() {
   local agg_url="$1"
   local destruction_id="$2"
   local receipts_dir="$3"
+  rm -rf "${receipts_dir:?}"
   mkdir -p "$receipts_dir"
   local raw
   raw="$(curl -fsS "${agg_url}/destructions/${destruction_id}/receipts")"
