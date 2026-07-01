@@ -21,6 +21,7 @@ fi
 source "$RUN_DIR/credentials.env"
 
 NONCE="$(openssl rand -hex 16)"
+echo "$NONCE" >"$RUN_DIR/last-nonce"
 CUSTOMER_SIG_B64="$(echo -n "$CUSTOMER_JWT" | base64 -w0 2>/dev/null || echo -n "$CUSTOMER_JWT" | base64)"
 
 step "VM1 — trigger federated deletion"
@@ -44,7 +45,8 @@ step "Waiting for quorum (up to 60s) ..."
 AGG_URL="http://${VM1_IP}:7004"
 for i in $(seq 1 30); do
   if curl -fsS "${AGG_URL}/destructions/${DESTRUCTION_ID}/proof" -o "$RUN_DIR/last-proof.json" 2>/dev/null; then
-  substep "Proof ready → $RUN_DIR/last-proof.json"
+    substep "Proof ready → $RUN_DIR/last-proof.json"
+    save_destruction_receipts "$AGG_URL" "$DESTRUCTION_ID" "$RUN_DIR/receipts"
     break
   fi
   sleep 2
@@ -57,10 +59,6 @@ if [[ -f "$RUN_DIR/last-proof.json" ]]; then
   step "Unified proof"
   cat "$RUN_DIR/last-proof.json" | (command -v jq >/dev/null && jq . || cat)
   echo ""
-  substep "Verify with:"
-  echo "  go run ./cmd/sealed-verify-deletion/main.go \\"
-  echo "    -registry http://${VM1_IP}:7001 \\"
-  echo "    -tenant ${TENANT_ID} \\"
-  echo "    -proof $RUN_DIR/last-proof.json \\"
-  echo "    -receipts $RUN_DIR/receipts/"
+  substep "Verify with:  ./vm1-verify.sh"
+  echo "  (or from repo root: go run ./cmd/sealed-verify-deletion/main.go ...)"
 fi

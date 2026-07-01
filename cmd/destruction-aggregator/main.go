@@ -45,11 +45,14 @@ func main() {
 		id := parts[0]
 
 		if len(parts) == 2 && parts[1] == "receipts" {
-			if r.Method != http.MethodPost {
+			switch r.Method {
+			case http.MethodPost:
+				handleSubmitReceipt(w, r, agg, id)
+			case http.MethodGet:
+				handleGetReceipts(w, r, agg, id)
+			default:
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-				return
 			}
-			handleSubmitReceipt(w, r, agg, id)
 			return
 		}
 		if len(parts) == 2 && parts[1] == "aggregate" {
@@ -139,6 +142,26 @@ func handleAggregate(w http.ResponseWriter, r *http.Request, agg *destruction.Ag
 		return
 	}
 	writeJSON(w, http.StatusOK, proof)
+}
+
+func handleGetReceipts(w http.ResponseWriter, r *http.Request, agg *destruction.Aggregator, destructionID string) {
+	pending, ok := agg.GetPending(destructionID)
+	if !ok {
+		http.Error(w, "destruction not found", http.StatusNotFound)
+		return
+	}
+	receipts := make([]destruction.Receipt, 0, len(pending.Receipts))
+	for _, rcpt := range pending.Receipts {
+		receipts = append(receipts, rcpt)
+	}
+	if len(receipts) == 0 {
+		http.Error(w, "no receipts yet", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"destruction_id": destructionID,
+		"receipts":       receipts,
+	})
 }
 
 func handleGetProof(w http.ResponseWriter, r *http.Request, agg *destruction.Aggregator, destructionID string) {

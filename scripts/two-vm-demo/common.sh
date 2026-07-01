@@ -249,3 +249,25 @@ coordinator_pubkey_hex() {
     go run ./scripts/two-vm-demo/coordinator_pubkey.go "$seed_hex"
   )
 }
+
+save_destruction_receipts() {
+  local agg_url="$1"
+  local destruction_id="$2"
+  local receipts_dir="$3"
+  mkdir -p "$receipts_dir"
+  local raw
+  raw="$(curl -fsS "${agg_url}/destructions/${destruction_id}/receipts")"
+  if command -v jq >/dev/null; then
+    local count=0
+    while IFS= read -r rcpt; do
+      local op
+      op="$(echo "$rcpt" | jq -r '.package.operator_id')"
+      echo "$rcpt" | jq . >"${receipts_dir}/${op}.json"
+      count=$((count + 1))
+    done < <(echo "$raw" | jq -c '.receipts[]')
+    substep "Saved $count receipt(s) → $receipts_dir/"
+  else
+    echo "$raw" >"${receipts_dir}/all.json"
+    substep "Saved receipts bundle → ${receipts_dir}/all.json (install jq to split per-operator files)"
+  fi
+}
