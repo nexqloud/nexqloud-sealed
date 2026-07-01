@@ -5,9 +5,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"testing"
 
+	"nexqloud-sealed/internal/attest"
 	"nexqloud-sealed/internal/receipt"
 )
 
@@ -17,8 +17,12 @@ func TestVerifyDerivationReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	attRaw := json.RawMessage(`{"report":{"version":2,"reportData":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}`)
-	sum, err := attestationProtoDigest(attRaw)
+	attRaw := attest.TestAttestationJSON()
+	digest, err := attest.ReportDigest(attRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum, err := hex.DecodeString(stringsTrimPrefix(digest, "sha256:"))
 	if err != nil {
 		t.Fatal(err)
 	}

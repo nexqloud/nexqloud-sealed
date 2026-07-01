@@ -267,7 +267,17 @@ function setupThemeToggle() {
 
 async function initWasm() {
   const go = new Go();
-  const response = await fetch('main.wasm');
+  let buildID = '';
+  try {
+    const buildResp = await fetch('wasm_build.txt', { cache: 'no-store' });
+    if (buildResp.ok) {
+      buildID = (await buildResp.text()).trim();
+    }
+  } catch {
+    // ignore missing build id
+  }
+  const wasmURL = buildID ? `main.wasm?v=${encodeURIComponent(buildID)}` : 'main.wasm';
+  const response = await fetch(wasmURL, { cache: 'no-store' });
   const bytes = await response.arrayBuffer();
   const result = await WebAssembly.instantiate(bytes, go.importObject);
   go.run(result.instance);

@@ -6,6 +6,7 @@ all: wasm wasm_exec
 
 wasm:
 	GOOS=js GOARCH=wasm go build -o web/main.wasm ./web
+	@date -u +%Y%m%d%H%M%S > web/wasm_build.txt
 
 wasm_exec:
 	@for src in "$(GO_ROOT)/lib/wasm/wasm_exec.js" "$(GO_ROOT)/misc/wasm/wasm_exec.js"; do \

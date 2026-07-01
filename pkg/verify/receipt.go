@@ -3,7 +3,6 @@ package verify
 import (
 	"bytes"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +12,7 @@ import (
 	"github.com/gowebpki/jcs"
 	"google.golang.org/protobuf/encoding/protojson"
 
+	"nexqloud-sealed/internal/attest"
 	"nexqloud-sealed/internal/gpu"
 	"nexqloud-sealed/internal/receipt"
 	iv "nexqloud-sealed/internal/verify"
@@ -292,22 +292,19 @@ func stringsHasPrefix(s, prefix string) bool {
 }
 
 func attestationProtoDigest(attRaw json.RawMessage) ([]byte, error) {
-	if len(attRaw) == 0 || string(attRaw) == "{}" {
-		return nil, fmt.Errorf("missing attestation")
-	}
-
-	att := &sevsnp.Attestation{}
-	if err := protojson.Unmarshal(attRaw, att); err != nil {
-		return nil, fmt.Errorf("parse attestation: %w", err)
-	}
-
-	canonical, err := protojson.Marshal(att)
+	digest, err := attest.ReportDigest(attRaw)
 	if err != nil {
-		return nil, fmt.Errorf("marshal attestation: %w", err)
+		return nil, err
 	}
-
-	sum := sha256.Sum256(canonical)
-	return sum[:], nil
+	const prefix = "sha256:"
+	if len(digest) <= len(prefix) || digest[:len(prefix)] != prefix {
+		return nil, fmt.Errorf("invalid digest: %s", digest)
+	}
+	sum, err := hex.DecodeString(digest[len(prefix):])
+	if err != nil {
+		return nil, fmt.Errorf("decode digest: %w", err)
+	}
+	return sum, nil
 }
 
 func pickHardwareRoots(att *sevsnp.Attestation, catalog map[string]HardwareRoots) iv.HardwareRoots {

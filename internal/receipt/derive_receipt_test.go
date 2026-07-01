@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gowebpki/jcs"
+	"nexqloud-sealed/internal/attest"
 )
 
 func TestDerivationReceiptPackageFields(t *testing.T) {
@@ -16,8 +17,8 @@ func TestDerivationReceiptPackageFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	att := []byte(`{"report":{"version":2}}`)
-	attHash, err := attestationDigest(att)
+	att := attest.TestAttestationJSON()
+	attHash, err := attest.ReportDigest(att)
 	if err != nil {
 		t.Fatal(err)
 	}
