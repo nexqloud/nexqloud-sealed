@@ -43,19 +43,47 @@ require_var() {
   fi
 }
 
+default_demo_bin_dir() {
+  echo "${HOME}/.cache/nexqloud-destruction-demo/bin"
+}
+
 ensure_run_dir() {
-  mkdir -p "$RUN_DIR/logs" "$RUN_DIR/state/operator-a" "$RUN_DIR/state/operator-b" "$RUN_DIR/bin"
+  mkdir -p "$RUN_DIR/logs" "$RUN_DIR/state/operator-a" "$RUN_DIR/state/operator-b"
+}
+
+ensure_demo_bin_dir() {
+  DEMO_BIN_DIR="${DEMO_BIN_DIR:-$(default_demo_bin_dir)}"
+  mkdir -p "$DEMO_BIN_DIR"
+  local probe="$DEMO_BIN_DIR/.exec-probe"
+  printf '#!/bin/sh\nexit 0\n' >"$probe"
+  chmod +x "$probe"
+  if ! "$probe" 2>/dev/null; then
+    rm -f "$probe"
+    die "Cannot execute binaries in DEMO_BIN_DIR=$DEMO_BIN_DIR — pick a directory on an exec-mounted filesystem (e.g. under \$HOME)."
+  fi
+  rm -f "$probe"
 }
 
 build_demo_bin() {
   local name="$1"
   local pkg_path="$2"
-  local out="$RUN_DIR/bin/$name"
+  ensure_demo_bin_dir
+  local out="$DEMO_BIN_DIR/$name"
   if [[ ! -x "$out" ]]; then
-    substep "Building $name ..."
-    (cd "$REPO_ROOT" && go build -o "$out" "$pkg_path")
+    substep "Building $name → $out"
+    if ! (cd "$REPO_ROOT" && go build -o "$out" "$pkg_path"); then
+      die "go build failed for $name (package $pkg_path)"
+    fi
   fi
   echo "$out"
+}
+
+start_service_or_die() {
+  local name="$1"
+  shift
+  if ! start_service "$name" "$@"; then
+    die "$name failed to start — see $(log_file "$name")"
+  fi
 }
 
 # Return PIDs listening on a TCP port (Linux ss).
@@ -140,6 +168,9 @@ start_service() {
 
   substep "$name failed to start — last log lines:"
   tail -20 "$log" >&2 || true
+  if grep -qi 'permission denied\|noexec\|text file busy' "$log" 2>/dev/null; then
+    substep "Hint: binaries live in DEMO_BIN_DIR=${DEMO_BIN_DIR:-$(default_demo_bin_dir)} (not RUN_DIR). If this path is not executable, set DEMO_BIN_DIR in your env file." >&2
+  fi
   rm -f "$pf"
   return 1
 }

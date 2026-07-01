@@ -56,6 +56,29 @@ If status shows STOPPED but ports are busy, run `./vm1-stop.sh` then `./vm1-star
 
 No need to search `ps aux`. Each delete needs a **new nonce** — `vm1-delete.sh` generates one automatically.
 
+## Troubleshooting
+
+### `vm1-start.sh` stops after "Starting registry ..."
+
+Binaries are built under `DEMO_BIN_DIR` (default `~/.cache/nexqloud-destruction-demo/bin`), not under `RUN_DIR`. Older script versions put binaries in `$RUN_DIR/bin/` which fails when `/tmp` is mounted `noexec`.
+
+```bash
+# Check the registry log
+tail -30 /tmp/nexqloud-destruction-demo-vm1/logs/registry.log
+
+# Confirm /tmp is noexec (common on hardened VMs)
+mount | grep ' /tmp '
+```
+
+Pull the latest scripts and run `./vm1-start.sh` again. On failure you should now see log tail + `ERROR: registry failed to start`.
+
+### View logs
+
+```bash
+tail -f /tmp/nexqloud-destruction-demo-vm1/logs/registry.log
+tail -f /tmp/nexqloud-destruction-demo-vm1/logs/coordinator.log
+```
+
 ## Ports
 
 | Service | Port |

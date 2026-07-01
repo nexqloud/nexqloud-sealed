@@ -24,10 +24,12 @@ COORDINATOR_KEY_HEX="${COORDINATOR_KEY_HEX:-0123456789abcdef0123456789abcdef0123
 COORDINATOR_PUB_HEX="${COORDINATOR_PUB_HEX:-$(coordinator_pubkey_hex "$COORDINATOR_KEY_HEX")}"
 
 ensure_run_dir
+ensure_demo_bin_dir
 
 step "VM2 destruction demo — start"
 substep "REPO_ROOT=$REPO_ROOT"
 substep "RUN_DIR=$RUN_DIR"
+substep "DEMO_BIN_DIR=$DEMO_BIN_DIR"
 substep "VM1_IP=$VM1_IP  (registry, aggregator, IdP)"
 substep "VM2_IP=$VM2_IP  (operator B listens here)"
 substep "Coordinator pubkey: ${COORDINATOR_PUB_HEX:0:16}..."
@@ -46,18 +48,15 @@ if curl -fsS "$REGISTRY_URL/records/${TENANT_ID}" | grep -q operator-b; then
 fi
 if [[ "$WRAP_OK" != true ]]; then
   substep "Posting operator-b wrap with shared seed ..."
-  (
-    cd "$REPO_ROOT"
-    go run ./cmd/bootstrap/main.go \
-      -registry "$REGISTRY_URL" \
-      -operators operator-b \
-      -seed-hex "$SEED_HEX"
-  ) | tee "$RUN_DIR/logs/bootstrap.log"
+  "$(build_demo_bin bootstrap ./cmd/bootstrap/main.go)" \
+    -registry "$REGISTRY_URL" \
+    -operators operator-b \
+    -seed-hex "$SEED_HEX" 2>&1 | tee "$RUN_DIR/logs/bootstrap.log"
 fi
 curl -fsS "$REGISTRY_URL/records/${TENANT_ID}" | (command -v jq >/dev/null && jq '.wraps | keys' || cat)
 
 step "Step 3/3 — Operator B TEE (:7102)"
-start_service operator-b "$(build_demo_bin operator-tee ./cmd/operator-tee/main.go)" \
+start_service_or_die operator-b "$(build_demo_bin operator-tee ./cmd/operator-tee/main.go)" \
   -operator-id operator-b \
   -addr :7102 \
   -registry "$REGISTRY_URL" \
