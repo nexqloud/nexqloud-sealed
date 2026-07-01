@@ -6,13 +6,13 @@ import (
 	"github.com/google/go-sev-guest/client"
 )
 
-const derivedKeyGuestFieldSelect = uint64(1 << 5)
+const derivedKeyGuestFieldSelect = uint64(1 << 3)
 
 func DerivedKeyRequest() *client.SnpDerivedKeyReq {
 	return &client.SnpDerivedKeyReq{
 		UseVCEK: true,
 		GuestFieldSelect: client.GuestFieldSelect{
-			TCBVersion: true,
+			Measurement: true,
 		},
 	}
 }

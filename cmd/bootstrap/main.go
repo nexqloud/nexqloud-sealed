@@ -64,6 +64,7 @@ func main() {
 	}
 
 	fmt.Printf("posted %s record (key_version=%d) with wraps for %s\n", tenantID, keyVersion, strings.Join(sortedKeys(wraps), ", "))
+	fmt.Printf("chip-fingerprint: sha256:%s\n", hex.EncodeToString(chipFingerprint(chipSecret)))
 	if generated {
 		fmt.Printf("seed-hex (save for other VMs): %s\n", hex.EncodeToString(seed))
 	}
@@ -106,6 +107,11 @@ func postRecord(registryURL string, record registry.CommitmentRecord) error {
 		return fmt.Errorf("registry %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
 	return nil
+}
+
+func chipFingerprint(chipSecret []byte) []byte {
+	sum := sha256.Sum256(chipSecret)
+	return sum[:]
 }
 
 func sortedKeys(m map[string][]byte) []string {

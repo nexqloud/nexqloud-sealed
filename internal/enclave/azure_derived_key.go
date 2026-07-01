@@ -60,9 +60,11 @@ func azureChipFromBootReport() ([]byte, error) {
 		return nil, fmt.Errorf("parse SNP report from HCL boot blob: %w", err)
 	}
 
-	tcb := make([]byte, 8)
-	binary.LittleEndian.PutUint64(tcb, report.GetCommittedTcb())
-	sum := sha256.Sum256(tcb)
+	measurement := report.GetMeasurement()
+	if len(measurement) == 0 {
+		return nil, fmt.Errorf("SNP report missing measurement")
+	}
+	sum := sha256.Sum256(measurement)
 	return sum[:], nil
 }
 
