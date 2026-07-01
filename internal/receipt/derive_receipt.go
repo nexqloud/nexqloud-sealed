@@ -35,7 +35,7 @@ func (b *Builder) DerivationReceipt(opID string, attJSON []byte, tenantID string
 		"timestamp":        time.Now().UTC().Format(time.RFC3339),
 	}
 
-	canonicalPkg, err := canonicalize(pkg)
+	canonicalPkg, err := Canonicalize(pkg)
 	if err != nil {
 		panic(err)
 	}

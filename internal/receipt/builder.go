@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gowebpki/jcs"
 	"github.com/google/go-sev-guest/proto/sevsnp"
 	"google.golang.org/protobuf/encoding/protojson"
 
@@ -87,7 +86,7 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		return nil, err
 	}
 
-	canonicalPkg, err := canonicalize(pkgMap)
+	canonicalPkg, err := Canonicalize(pkgMap)
 	if err != nil {
 		return nil, err
 	}
@@ -138,14 +137,6 @@ func digest(value string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func canonicalize(v any) ([]byte, error) {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	return jcs.Transform(raw)
-}
-
 func buildAzureRuntimeClaims(pub ed25519.PublicKey, nonce []byte) ([]byte, error) {
 	keyHash := enclave.KeyHash(pub, nonce)
 	userData := hex.EncodeToString(keyHash[:])
@@ -154,11 +145,7 @@ func buildAzureRuntimeClaims(pub ed25519.PublicKey, nonce []byte) ([]byte, error
 		"vm-configuration": map[string]any{},
 		"user-data":        userData,
 	}
-	raw, err := json.Marshal(claims)
-	if err != nil {
-		return nil, err
-	}
-	return jcs.Transform(raw)
+	return Canonicalize(claims)
 }
 
 func attestationJSON(att *sevsnp.Attestation) (json.RawMessage, error) {

@@ -36,7 +36,7 @@ func TestDerivationReceiptPackageFields(t *testing.T) {
 		"timestamp":        "2026-07-01T00:00:00Z",
 	}
 
-	canonical, err := canonicalize(pkg)
+	canonical, err := Canonicalize(pkg)
 	if err != nil {
 		t.Fatal(err)
 	}

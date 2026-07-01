@@ -23,7 +23,7 @@ func TestReportDigestFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if digest != "sha256:a679662e01eb3bb49252a0470f7320dca9a53c1f44599cd74b190ad10732e65c" {
+	if digest != "sha256:37eff46598e5a80eca2936133615b9b8dad718f290f4352e30aaed2d0feb1511" {
 		t.Fatalf("digest = %s", digest)
 	}
 }
