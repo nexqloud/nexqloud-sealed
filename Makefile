@@ -18,3 +18,6 @@ wasm_exec:
 
 clean:
 	rm -f web/main.wasm web/wasm_exec.js
+
+update-and-run:
+	git pull && go run ./cmd/shim/main.go
