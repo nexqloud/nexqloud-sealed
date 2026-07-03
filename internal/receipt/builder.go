@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/google/go-sev-guest/proto/sevsnp"
-	"google.golang.org/protobuf/encoding/protojson"
 
 	"nexqloud-sealed/internal/enclave"
 	"nexqloud-sealed/internal/gpu"
@@ -99,7 +97,7 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		logIndexCh <- tlog.AppendToLog(canonicalPkg, sigHex, b.priv)
 	}()
 
-	attestationJSON, err := attestationJSON(att)
+	attestationJSON, err := MarshalAttestation(att)
 	if err != nil {
 		return nil, err
 	}
@@ -135,15 +133,4 @@ func packageMap(pkg Package) (map[string]any, error) {
 func digest(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
-func attestationJSON(att *sevsnp.Attestation) (json.RawMessage, error) {
-	if att == nil || att.Report == nil {
-		return json.RawMessage("{}"), nil
-	}
-	raw, err := protojson.Marshal(&sevsnp.Attestation{Report: att.Report})
-	if err != nil {
-		return nil, err
-	}
-	return json.RawMessage(raw), nil
 }

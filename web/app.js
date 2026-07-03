@@ -132,16 +132,6 @@ const RECEIPT_TOPICS = [
     plainEnglish: 'This proves the attestation came from real AMD silicon. We validate the certificate chain from the CPU up to AMD root keys, and confirm the hardware report was signed by that CPU.',
   },
   {
-    id: 'unused_chain',
-    checkId: null,
-    swatchClass: 'unused',
-    label: 'Unused duplicate chain',
-    description: 'Not used by the verifier — cert_chain is authoritative.',
-    fieldHint: 'Hidden "certificateChain" block (expand to inspect).',
-    plainEnglish: 'A second copy of the certificates nested inside attestation. The verifier only uses the top-level cert_chain field, so editing this hidden copy alone would not fail verification.',
-    statusOverride: 'info',
-  },
-  {
     id: 'key_binding',
     checkId: 'key_binding',
     swatchClass: 'key_binding',
@@ -211,7 +201,7 @@ const RECEIPT_TOPICS = [
 const TRUNCATE_LEN = 52;
 const REPORT_HIGHLIGHT_KEYS = ['chipId', 'reportData', 'measurement', 'signature'];
 const ROOT_KEY_ORDER = ['package', 'signature', 'pubkey', 'attestation', 'cert_chain', 'runtime_claims_json', 'nonce', 'log_index'];
-const DEFAULT_COLLAPSED = ['attestation.certificateChain', 'attestation.report.__other__'];
+const DEFAULT_COLLAPSED = ['attestation.report.__other__'];
 
 let wasmReady = false;
 let viewMode = 'simple';
@@ -414,7 +404,6 @@ function topicForPath(path, receipt = lastReceipt) {
   }
   if (path === 'signature' || path === 'pubkey' || path === 'package') return 'signature';
   if (path.startsWith('cert_chain')) return 'hardware';
-  if (path.startsWith('attestation.certificateChain')) return 'unused_chain';
   if (path === 'attestation' || path === 'attestation.report') return 'hardware';
   if (path.startsWith('attestation.report.')) {
     const key = path.split('.').pop();
@@ -530,19 +519,6 @@ function renderObjectEntries(obj, path, depth, keys) {
     const keyTopic = topicForPath(childPath);
     const keyAttrs = keyTopic ? ` class="receipt-key receipt-field" data-path="${escapeHtml(childPath)}" data-topic="${keyTopic}"` : ` class="receipt-key"`;
 
-    if (path === 'attestation' && key === 'certificateChain') {
-      const isOpen = !collapsedSections.has(childPath);
-      lines.push(renderCollapsedBanner('certificateChain', childPath, depth + 1, 'duplicate certs · not verified', 'unused_chain'));
-      if (isOpen) {
-        lines.push(`<div class="receipt-block receipt-block--nested" data-collapse-body="${escapeHtml(childPath)}">`);
-        lines.push(emitLine('<span class="receipt-punct">{</span>', depth + 1, 'unused_chain'));
-        lines.push(renderObject(obj[key], childPath, depth + 2));
-        lines.push(emitLine(`<span class="receipt-punct">}</span>${comma}`, depth + 1, 'unused_chain'));
-        lines.push('</div>');
-      }
-      continue;
-    }
-
     if (path === 'attestation.report' && key === '__other__') {
       continue;
     }
@@ -563,13 +539,7 @@ function renderObjectEntries(obj, path, depth, keys) {
 function objectKeysForPath(obj, path) {
   if (!path) return ROOT_KEY_ORDER.filter((k) => k in obj);
   if (path === 'attestation') {
-    const keys = [];
-    if ('report' in obj) keys.push('report');
-    if ('certificateChain' in obj) keys.push('certificateChain');
-    for (const k of Object.keys(obj)) {
-      if (!keys.includes(k)) keys.push(k);
-    }
-    return keys;
+    return ['report'].filter((k) => k in obj);
   }
   if (path === 'attestation.report') {
     return REPORT_HIGHLIGHT_KEYS.filter((k) => k in obj);

@@ -12,8 +12,6 @@ import (
 	"os"
 	"strings"
 
-	"google.golang.org/protobuf/encoding/protojson"
-
 	"nexqloud-sealed/internal/enclave"
 	"nexqloud-sealed/internal/kdf"
 	"nexqloud-sealed/internal/registry"
@@ -134,7 +132,7 @@ func operatorAttestation(pub ed25519.PublicKey) ([]byte, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	attBytes, err := protojson.Marshal(att)
+	attBytes, err := receipt.MarshalAttestation(att)
 	if err != nil {
 		return nil, nil, err
 	}

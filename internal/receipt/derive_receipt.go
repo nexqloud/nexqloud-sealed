@@ -62,11 +62,16 @@ func (b *Builder) DerivationReceipt(opID string, attJSON []byte, tenantID string
 		panic(err)
 	}
 
+	storedAtt, err := NormalizeAttestationJSON(attJSON)
+	if err != nil {
+		panic(err)
+	}
+
 	return map[string]any{
 		"package":             pkg,
 		"signature":           sigHex,
 		"pubkey":              hex.EncodeToString(b.pub),
-		"attestation":         json.RawMessage(attJSON),
+		"attestation":         storedAtt,
 		"cert_chain":          certChain,
 		"runtime_claims_json": json.RawMessage(runtimeClaimsJSON),
 		"nonce":               hex.EncodeToString(nonce),

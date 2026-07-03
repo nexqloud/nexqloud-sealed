@@ -15,7 +15,6 @@ import (
 
 	"nexqloud-sealed/internal/attest"
 	"nexqloud-sealed/internal/destruction"
-	"nexqloud-sealed/internal/destroy"
 	"nexqloud-sealed/internal/registry"
 )
 
@@ -29,6 +28,64 @@ type DeletionResult struct {
 }
 
 func VerifyDeletion(proof destruction.Proof, receipts []destruction.Receipt, registryURL, tenantID string, challengeHex string, rootsCatalog map[string]HardwareRoots) DeletionResult {
+	var want []string
+	var source string
+	var err error
+	if strings.TrimSpace(registryURL) == "" {
+		want, source, err = registryQuorumFromRecordOrProof(nil, proof)
+	} else {
+		want, source, err = registryQuorumHTTP(registryURL, tenantID)
+	}
+	if err != nil {
+		result := DeletionResult{LogIndex: proof.LogIndex}
+		if proof.Package != nil {
+			if id, ok := proof.Package["destruction_id"].(string); ok {
+				result.DestructionID = id
+			}
+		}
+		result.Checks = append(result.Checks, Check{
+			ID:     "registry_quorum",
+			Label:  "Registry Quorum",
+			Detail: err.Error(),
+		})
+		result.OverallOK = false
+		return result
+	}
+	return verifyDeletionCore(proof, receipts, want, source, challengeHex, rootsCatalog)
+}
+
+func VerifyDeletionBundle(proof destruction.Proof, receipts []destruction.Receipt, registryRecordJSON []byte, challengeHex string, rootsCatalog map[string]HardwareRoots) DeletionResult {
+	receipts = filterReceiptsForDestruction(proof, receipts)
+	want, source, err := registryQuorumFromRecordOrProof(registryRecordJSON, proof)
+	if err != nil {
+		result := DeletionResult{LogIndex: proof.LogIndex}
+		if proof.Package != nil {
+			if id, ok := proof.Package["destruction_id"].(string); ok {
+				result.DestructionID = id
+			}
+		}
+		result.Error = err.Error()
+		result.OverallOK = false
+		return result
+	}
+	return verifyDeletionCore(proof, receipts, want, source, challengeHex, rootsCatalog)
+}
+
+func VerifyDeletionJSON(proofJSON, receiptsJSON, registryRecordJSON []byte, challengeHex string, rootsCatalog map[string]HardwareRoots) (DeletionResult, error) {
+	var proof destruction.Proof
+	if err := json.Unmarshal(proofJSON, &proof); err != nil {
+		return DeletionResult{}, fmt.Errorf("invalid proof json: %w", err)
+	}
+	var receipts []destruction.Receipt
+	if len(receiptsJSON) > 0 {
+		if err := json.Unmarshal(receiptsJSON, &receipts); err != nil {
+			return DeletionResult{}, fmt.Errorf("invalid receipts json: %w", err)
+		}
+	}
+	return VerifyDeletionBundle(proof, receipts, registryRecordJSON, challengeHex, rootsCatalog), nil
+}
+
+func verifyDeletionCore(proof destruction.Proof, receipts []destruction.Receipt, wantQuorum []string, quorumSource string, challengeHex string, rootsCatalog map[string]HardwareRoots) DeletionResult {
 	result := DeletionResult{
 		LogIndex: proof.LogIndex,
 	}
@@ -46,27 +103,22 @@ func VerifyDeletion(proof destruction.Proof, receipts []destruction.Receipt, reg
 		result.Checks = append(result.Checks, verifyDestructionReceipt(rcpt, challengeHex, rootsCatalog)...)
 	}
 
-	want, err := registryQuorum(registryURL, tenantID)
-	if err != nil {
-		result.Checks = append(result.Checks, Check{
-			ID:     "registry_quorum",
-			Label:  "Registry Quorum",
-			Detail: err.Error(),
-		})
-	} else {
-		got := operatorIDs(receipts)
-		ok := sameOperatorSet(want, got)
-		detail := fmt.Sprintf("registry=%v receipts=%v", want, got)
-		if ok {
+	got := operatorIDs(receipts)
+	ok := sameOperatorSet(wantQuorum, got)
+	detail := fmt.Sprintf("%s=%v receipts=%v", quorumSource, wantQuorum, got)
+	if ok {
+		if quorumSource == "registry" {
 			detail = "destruction quorum matches registry wraps"
+		} else {
+			detail = "destruction quorum matches proof package"
 		}
-		result.Checks = append(result.Checks, Check{
-			ID:     "registry_quorum",
-			Label:  "Registry Quorum",
-			OK:     ok,
-			Detail: detail,
-		})
 	}
+	result.Checks = append(result.Checks, Check{
+		ID:     "registry_quorum",
+		Label:  "Registry Quorum",
+		OK:     ok,
+		Detail: detail,
+	})
 
 	result.Checks = append(result.Checks, checkUnifiedProof(proof, receipts)...)
 
@@ -77,6 +129,54 @@ func VerifyDeletion(proof destruction.Proof, receipts []destruction.Receipt, reg
 		}
 	}
 	return result
+}
+
+func filterReceiptsForDestruction(proof destruction.Proof, receipts []destruction.Receipt) []destruction.Receipt {
+	if proof.Package == nil {
+		return receipts
+	}
+	wantID, _ := proof.Package["destruction_id"].(string)
+	if wantID == "" {
+		return receipts
+	}
+	filtered := make([]destruction.Receipt, 0, len(receipts))
+	for _, rcpt := range receipts {
+		if rcpt.DestructionID() == wantID {
+			filtered = append(filtered, rcpt)
+		}
+	}
+	if len(filtered) == 0 {
+		return receipts
+	}
+	return filtered
+}
+
+func registryQuorumFromRecordOrProof(registryRecordJSON []byte, proof destruction.Proof) ([]string, string, error) {
+	trimmed := strings.TrimSpace(string(registryRecordJSON))
+	if trimmed != "" && trimmed != "{}" && trimmed != "null" {
+		var rec registry.CommitmentRecord
+		if err := json.Unmarshal(registryRecordJSON, &rec); err != nil {
+			return nil, "", fmt.Errorf("invalid registry record json: %w", err)
+		}
+		return quorumFromRecord(&rec), "registry", nil
+	}
+	want := proofQuorum(proof)
+	if len(want) == 0 {
+		return nil, "", fmt.Errorf("registry record or proof quorum is required")
+	}
+	return want, "proof", nil
+}
+
+func quorumFromRecord(rec *registry.CommitmentRecord) []string {
+	if rec == nil || len(rec.Wraps) == 0 {
+		return nil
+	}
+	ops := make([]string, 0, len(rec.Wraps))
+	for op := range rec.Wraps {
+		ops = append(ops, op)
+	}
+	sort.Strings(ops)
+	return ops
 }
 
 func verifyDestructionReceipt(rcpt destruction.Receipt, challengeHex string, rootsCatalog map[string]HardwareRoots) []Check {
@@ -103,19 +203,15 @@ func verifyDestructionReceipt(rcpt destruction.Receipt, challengeHex string, roo
 		}
 	}
 
-	chain := rcpt.CertChain
-	if chain.VCEK == "" && att != nil {
-		chain = resolveCertChain(chain, att)
-	}
 	roots := pickHardwareRoots(att, rootsCatalog)
-	checks = append(checks, checkHardware(att, chain, roots))
+	checks = append(checks, checkHardware(att, rcpt.CertChain, roots))
 
 	nonceHex := rcpt.Nonce
 	nonce, err := hex.DecodeString(nonceHex)
 	if err != nil || len(nonce) != 32 {
 		checks = append(checks, Check{ID: "key_binding", Label: "Key Bound to Silicon", Detail: "invalid nonce"})
 	} else {
-		checks = append(checks, checkKeyBinding(att, chain, publicKey, nonce, rcpt.RuntimeClaimsJSON))
+		checks = append(checks, checkKeyBinding(att, rcpt.CertChain, publicKey, nonce, rcpt.RuntimeClaimsJSON))
 	}
 
 	checks = append(checks, checkDestructionAttestationHash(rcpt.Package, rcpt.Attestation))
@@ -170,7 +266,12 @@ func checkDestructionZeroizationEvidence(pkg map[string]any) Check {
 		check.Detail = err.Error()
 		return check
 	}
-	var evidence destroy.ZeroizationEvidence
+	var evidence struct {
+		WrapHash                  string `json:"wrap_hash"`
+		CiphertextOverwritten     bool   `json:"ciphertext_overwritten"`
+		ChipContributionDestroyed bool   `json:"chip_contribution_destroyed"`
+		SaltRotated               bool   `json:"salt_rotated"`
+	}
 	if err := json.Unmarshal(data, &evidence); err != nil {
 		check.Detail = err.Error()
 		return check
@@ -284,33 +385,33 @@ func proofQuorum(proof destruction.Proof) []string {
 	}
 }
 
-func registryQuorum(registryURL, tenantID string) ([]string, error) {
+func registryQuorumHTTP(registryURL, tenantID string) ([]string, string, error) {
 	if registryURL == "" || tenantID == "" {
-		return nil, fmt.Errorf("registry url and tenant id are required")
+		return nil, "", fmt.Errorf("registry url and tenant id are required")
 	}
 	url := strings.TrimRight(registryURL, "/") + "/records/" + tenantID
 	resp, err := http.Get(url)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("registry %s", resp.Status)
+		return nil, "", fmt.Errorf("registry %s", resp.Status)
 	}
 	var rec registry.CommitmentRecord
 	if err := json.Unmarshal(body, &rec); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	ops := make([]string, 0, len(rec.Wraps))
-	for op := range rec.Wraps {
-		ops = append(ops, op)
-	}
-	sort.Strings(ops)
-	return ops, nil
+	return quorumFromRecord(&rec), "registry", nil
+}
+
+func registryQuorum(registryURL, tenantID string) ([]string, error) {
+	want, _, err := registryQuorumHTTP(registryURL, tenantID)
+	return want, err
 }
 
 func operatorIDs(receipts []destruction.Receipt) []string {

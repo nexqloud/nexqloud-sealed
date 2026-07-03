@@ -83,7 +83,11 @@ func BuildReceipt(in ReceiptInput) (destruction.Receipt, error) {
 		Pubkey:    hex.EncodeToString(in.Pub),
 	}
 	if len(in.AttestationJSON) > 0 {
-		rcpt.Attestation = json.RawMessage(in.AttestationJSON)
+		storedAtt, err := receipt.NormalizeAttestationJSON(in.AttestationJSON)
+		if err != nil {
+			return destruction.Receipt{}, fmt.Errorf("normalize attestation: %w", err)
+		}
+		rcpt.Attestation = storedAtt
 	}
 	if len(in.Nonce) > 0 {
 		rcpt.Nonce = hex.EncodeToString(in.Nonce)

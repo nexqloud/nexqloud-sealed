@@ -21,6 +21,7 @@ func init() {
 
 func main() {
 	js.Global().Set("verifyReceipt", js.FuncOf(verifyReceipt))
+	js.Global().Set("verifyDeletion", js.FuncOf(verifyDeletion))
 	<-make(chan struct{})
 }
 
@@ -45,5 +46,37 @@ func verifyReceipt(_ js.Value, args []js.Value) any {
 
 func errorResult(msg string) string {
 	out, _ := json.Marshal(verify.ReceiptResult{Error: msg})
+	return string(out)
+}
+
+func verifyDeletion(_ js.Value, args []js.Value) any {
+	if len(args) < 2 {
+		return deletionErrorResult("expected proof JSON and receipts JSON array")
+	}
+
+	proofJSON := []byte(args[0].String())
+	receiptsJSON := []byte(args[1].String())
+	registryRecordJSON := []byte{}
+	if len(args) > 2 {
+		registryRecordJSON = []byte(args[2].String())
+	}
+	challengeHex := ""
+	if len(args) > 3 {
+		challengeHex = args[3].String()
+	}
+
+	result, err := verify.VerifyDeletionJSON(proofJSON, receiptsJSON, registryRecordJSON, challengeHex, hardwareRootsCatalog)
+	if err != nil {
+		return deletionErrorResult(err.Error())
+	}
+	out, err := json.Marshal(result)
+	if err != nil {
+		return deletionErrorResult(err.Error())
+	}
+	return string(out)
+}
+
+func deletionErrorResult(msg string) string {
+	out, _ := json.Marshal(verify.DeletionResult{Error: msg, OverallOK: false})
 	return string(out)
 }

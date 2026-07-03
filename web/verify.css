@@ -392,6 +392,16 @@ code {
   background: var(--grey-2);
 }
 
+.verify-receipt-type--destruction .verify-receipt-type__accent {
+  background: #c2410c;
+}
+
+.verify-receipt-type--destruction .verify-receipt-type__kind {
+  color: #9a3412;
+  background: #fff7ed;
+  border-color: #fdba74;
+}
+
 .verify-receipt-type__body {
   flex: 1;
   min-width: 0;
@@ -979,7 +989,6 @@ code {
 .receipt-doc[data-focus-topic="freshness"] .receipt-row--match { --row-hl-accent: #747474; --row-hl-bg: #f2f2f2; }
 .receipt-doc[data-focus-topic="ledger"] .receipt-row--match { --row-hl-accent: #0a70cd; --row-hl-bg: #eef6ff; }
 .receipt-doc[data-focus-topic="signed_only"] .receipt-row--match { --row-hl-accent: #888888; --row-hl-bg: #f7f7f7; }
-.receipt-doc[data-focus-topic="unused_chain"] .receipt-row--match { --row-hl-accent: #b45309; --row-hl-bg: #fff7ed; }
 
 .receipt-doc[data-focus-topic="signature"] .receipt-field--pinned { --hl-accent: #0a70cd; --hl-bg: #eef6ff; }
 .receipt-doc[data-focus-topic="hardware"] .receipt-field--pinned { --hl-accent: #267800; --hl-bg: #eff7eb; }
@@ -990,7 +999,6 @@ code {
 .receipt-doc[data-focus-topic="freshness"] .receipt-field--pinned { --hl-accent: #747474; --hl-bg: #f2f2f2; }
 .receipt-doc[data-focus-topic="ledger"] .receipt-field--pinned { --hl-accent: #0a70cd; --hl-bg: #eef6ff; }
 .receipt-doc[data-focus-topic="signed_only"] .receipt-field--pinned { --hl-accent: #888888; --hl-bg: #f7f7f7; }
-.receipt-doc[data-focus-topic="unused_chain"] .receipt-field--pinned { --hl-accent: #b45309; --hl-bg: #fff7ed; }
 
 .receipt-ln {
   text-align: right;
@@ -1035,7 +1043,6 @@ code {
 .receipt-field[data-topic="freshness"] { --hl-accent: #747474; --hl-bg: #f2f2f2; }
 .receipt-field[data-topic="ledger"] { --hl-accent: #0a70cd; --hl-bg: #eef6ff; }
 .receipt-field[data-topic="signed_only"] { --hl-accent: #888888; --hl-bg: #f7f7f7; }
-.receipt-field[data-topic="unused_chain"] { --hl-accent: #b45309; --hl-bg: #fff7ed; }
 
 .receipt-field--pinned {
   background: color-mix(in srgb, var(--hl-bg, var(--lightbrand-1)) 40%, transparent) !important;
@@ -1165,6 +1172,12 @@ code {
   border-color: var(--border-subtle);
 }
 
+:root[data-theme="dark"] .verify-receipt-type--destruction .verify-receipt-type__kind {
+  color: #fdba74;
+  background: #3a2214;
+  border-color: #6b3a1f;
+}
+
 :root[data-theme="dark"] .receipt-lit--num,
 :root[data-theme="dark"] .receipt-lit--bool {
   color: #e0a84a;
@@ -1260,12 +1273,7 @@ code {
   --hl-bg: #222222;
 }
 
-:root[data-theme="dark"] .receipt-row--topic-unused,
-:root[data-theme="dark"] .receipt-field[data-topic="unused_chain"],
-:root[data-theme="dark"] .receipt-doc[data-focus-topic="unused_chain"] .receipt-row--match,
-:root[data-theme="dark"] .receipt-doc[data-focus-topic="unused_chain"] .receipt-field--pinned {
+:root[data-theme="dark"] .receipt-row--topic-unused {
   --row-hl-accent: #e0a84a;
   --row-hl-bg: #2a2218;
-  --hl-accent: #e0a84a;
-  --hl-bg: #2a2218;
 }

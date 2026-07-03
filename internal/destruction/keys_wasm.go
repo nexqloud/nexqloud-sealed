@@ -1,4 +1,4 @@
-//go:build !(js && wasm)
+//go:build js && wasm
 
 package destruction
 
@@ -6,14 +6,11 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
-
-	"nexqloud-sealed/internal/enclave"
 )
 
 func LoadCoordinatorKey(hexSeed string) (ed25519.PrivateKey, error) {
 	if hexSeed == "" {
-		sk, _, err := enclave.Key()
-		return sk, err
+		return nil, fmt.Errorf("coordinator key from enclave unavailable in wasm build")
 	}
 	seed, err := hex.DecodeString(hexSeed)
 	if err != nil {

@@ -178,13 +178,12 @@ func verifyDerivationReceipt(wrapper ReceiptFile, challengeHex string, rootsCata
 		}
 	}
 
-	chain := resolveCertChain(wrapper.CertChain, att)
 	roots := pickHardwareRoots(att, rootsCatalog)
 
 	result.Checks = append(result.Checks,
 		checkSignature(wrapper, publicKey),
-		checkHardware(att, chain, roots),
-		checkKeyBinding(att, chain, publicKey, nonce, wrapper.RuntimeClaimsJSON),
+		checkHardware(att, wrapper.CertChain, roots),
+		checkKeyBinding(att, wrapper.CertChain, publicKey, nonce, wrapper.RuntimeClaimsJSON),
 		checkDerivationAttestationHash(wrapper.Package, wrapper.Attestation),
 		checkDerivationOperatorID(wrapper.Package),
 		checkDerivationKeyVersion(wrapper.Package),
@@ -200,16 +199,6 @@ func verifyDerivationReceipt(wrapper ReceiptFile, challengeHex string, rootsCata
 	}
 
 	return result
-}
-
-func resolveCertChain(chain receipt.CertificateChain, att *sevsnp.Attestation) receipt.CertificateChain {
-	if chain.VCEK != "" {
-		return chain
-	}
-	if att != nil && att.CertificateChain != nil {
-		return receipt.EncodeCertificateChain(att.CertificateChain)
-	}
-	return chain
 }
 
 func checkDerivationAttestationHash(pkg map[string]any, attRaw json.RawMessage) Check {

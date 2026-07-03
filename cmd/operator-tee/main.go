@@ -15,12 +15,11 @@ import (
 	"os"
 	"strings"
 
-	"google.golang.org/protobuf/encoding/protojson"
-
 	"nexqloud-sealed/internal/attest"
 	"nexqloud-sealed/internal/destruction"
 	"nexqloud-sealed/internal/destroy"
 	"nexqloud-sealed/internal/enclave"
+	"nexqloud-sealed/internal/receipt"
 	"nexqloud-sealed/internal/registry"
 )
 
@@ -141,7 +140,7 @@ func operatorAttestation(pub ed25519.PublicKey, nonce []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return protojson.Marshal(att)
+	return receipt.MarshalAttestation(att)
 }
 
 func loadCoordinatorPub(hexPub string) (ed25519.PublicKey, error) {

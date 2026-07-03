@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NexQloud Sealed — Deletion Proof Verifier</title>
+  <link rel="icon" href="../assets/logos/nexqloud-mark.svg" type="image/svg+xml" />
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem('nexqloud-verify-theme');
+        var dark = stored === 'dark' || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="../verify.css" />
+  <link rel="stylesheet" href="destruction.css" />
+</head>
+<body class="verify-page">
+  <div class="verify-shell">
+    <header class="verify-header">
+      <div class="verify-brand">
+        <img class="verify-brand__wordmark" src="../assets/logos/nexqloud-wordmark-light.svg" data-src-light="../assets/logos/nexqloud-wordmark-light.svg" data-src-dark="../assets/logos/nexqloud-wordmark-dark.svg" alt="nexqloud" height="22" />
+      </div>
+
+      <div class="verify-eyebrow">
+        <span class="verify-eyebrow__dot" aria-hidden="true"></span>
+        <span>Federated Erasure Verification</span>
+      </div>
+
+      <h1 class="verify-title">Deletion Proof Verifier</h1>
+      <p class="verify-lede">
+        Verify federated cryptographic erasure proofs entirely in your browser.
+        Upload a unified <code>proof.json</code> and operator receipt files — nothing is sent to a server.
+      </p>
+    </header>
+
+    <div class="verify-upload-grid">
+      <section id="proof-card" class="verify-card verify-upload-card">
+        <div id="proof-drop" class="verify-drop" tabindex="0" role="button" aria-label="Upload proof.json">
+          <input type="file" id="proof-input" accept=".json,application/json" class="sr-only" />
+          <svg class="verify-drop__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          <p class="verify-drop__title">Unified proof</p>
+          <p class="verify-drop__hint">Drop <span class="verify-drop__filename">last-proof.json</span> or click to browse</p>
+        </div>
+        <div id="proof-attached" class="verify-attached" hidden>
+          <p class="verify-attached__label">Attached proof</p>
+          <ul id="proof-file-list" class="verify-attached__list"></ul>
+        </div>
+      </section>
+
+      <section id="receipts-card" class="verify-card verify-upload-card">
+        <div id="receipts-drop" class="verify-drop" tabindex="0" role="button" aria-label="Upload operator receipts">
+          <input type="file" id="receipts-input" accept=".json,application/json" multiple class="sr-only" />
+          <svg class="verify-drop__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
+          </svg>
+          <p class="verify-drop__title">Operator receipts</p>
+          <p class="verify-drop__hint">Drop receipt JSON files (e.g. <span class="verify-drop__filename">operator-a.json</span>)</p>
+        </div>
+        <div id="receipts-attached" class="verify-attached" hidden>
+          <p class="verify-attached__label">Attached receipts</p>
+          <ul id="receipt-file-list" class="verify-attached__list"></ul>
+        </div>
+      </section>
+    </div>
+
+    <section class="verify-card verify-card--pad verify-registry-section">
+      <h2 class="verify-section-label">Registry quorum (optional)</h2>
+      <div class="verify-field">
+        <label class="verify-field__label" for="registry-url">Registry URL</label>
+        <div class="verify-input">
+          <input type="url" id="registry-url" placeholder="http://51.124.119.89:7001" spellcheck="false" autocomplete="off" />
+        </div>
+      </div>
+      <div class="verify-field">
+        <label class="verify-field__label" for="tenant-id">Tenant ID</label>
+        <div class="verify-input">
+          <input type="text" id="tenant-id" placeholder="acme" spellcheck="false" autocomplete="off" />
+        </div>
+        <p class="verify-field__hint">
+          If provided, the browser fetches the live registry record to confirm operator quorum.
+          Leave empty to verify against the quorum embedded in the proof package.
+        </p>
+      </div>
+    </section>
+
+    <div class="verify-actions">
+      <button type="button" id="verify-btn" class="verify-btn verify-btn--primary" disabled>Run verification</button>
+      <button type="button" id="reset-btn" class="verify-btn verify-btn--ghost">Clear files</button>
+    </div>
+
+    <div id="status" class="verify-status" hidden>
+      <div id="status-spinner" class="verify-spinner" aria-hidden="true"></div>
+      <span id="status-text">Initializing WebAssembly module…</span>
+    </div>
+
+    <section id="results" class="verify-results" hidden>
+      <div id="proof-banner" class="verify-receipt-type verify-receipt-type--destruction">
+        <div class="verify-receipt-type__accent" aria-hidden="true"></div>
+        <div class="verify-receipt-type__body">
+          <div class="verify-receipt-type__top">
+            <span class="verify-receipt-type__kind">Erasure</span>
+            <code class="verify-receipt-type__schema">sealed-destruction-proof/1</code>
+          </div>
+          <h2 class="verify-receipt-type__title">Federated Destruction Proof</h2>
+          <p class="verify-receipt-type__subtitle">
+            Unified proof binding operator destruction receipts, registry quorum, zeroization evidence,
+            salt epoch rotation, and the federated Merkle root.
+          </p>
+          <p id="proof-meta" class="verify-proof-meta"></p>
+        </div>
+      </div>
+
+      <div class="verify-results__head">
+        <div class="verify-results__head-left">
+          <h2 class="verify-section-label">Verification Checks</h2>
+          <div class="verify-mode" role="group" aria-label="Results view mode">
+            <button type="button" id="mode-simple" class="verify-mode__btn verify-mode__btn--active" aria-pressed="true">Simple</button>
+            <button type="button" id="mode-advanced" class="verify-mode__btn" aria-pressed="false">Advanced</button>
+          </div>
+        </div>
+        <span id="overall-badge" class="verify-badge"></span>
+      </div>
+
+      <div id="simple-panel">
+        <div id="check-groups"></div>
+
+        <div id="ledger-section" class="verify-ledger" hidden>
+          <h3 class="verify-section-label">Public Ledger</h3>
+          <ul id="ledger-info" class="verify-checklist" role="list"></ul>
+        </div>
+
+        <p id="result-meta" class="verify-meta"></p>
+      </div>
+
+      <section id="advanced-section" class="verify-advanced" hidden>
+        <div class="verify-advanced__intro">
+          <h3 class="verify-section-label">Proof &amp; Receipt JSON Explorer</h3>
+          <p class="verify-advanced__lede">
+            Switch between the unified proof and each operator receipt. Hover highlighted fields to see which verification check they map to.
+          </p>
+          <div id="advanced-file-tabs" class="verify-advanced__file-tabs" role="tablist" aria-label="JSON documents"></div>
+        </div>
+        <div class="verify-advanced__layout">
+          <aside class="verify-advanced__legend-wrap">
+            <p class="verify-advanced__legend-title">Field guide</p>
+            <p id="advanced-focus-hint" class="verify-advanced__focus-hint" hidden></p>
+            <ul id="advanced-legend" class="verify-advanced__legend" role="list"></ul>
+          </aside>
+          <div class="verify-advanced__json-wrap">
+            <div id="advanced-json" class="verify-advanced__json" tabindex="0" aria-label="Annotated JSON"></div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <footer class="verify-footer">
+      <p>verify.nexqloud.io/destruction · Wasm verifier · Ed25519 + AMD SEV-SNP + Merkle quorum · <a href="../">Derivation receipts</a></p>
+      <div class="verify-footer__health">
+        <span class="verify-footer__health-dot" aria-hidden="true"></span>
+        <span>All Systems Normal</span>
+        <button type="button" id="theme-toggle" class="verify-theme-toggle" aria-label="Switch to dark mode" title="Dark mode">
+          <svg class="verify-theme-toggle__icon verify-theme-toggle__icon--light" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/>
+          </svg>
+          <svg class="verify-theme-toggle__icon verify-theme-toggle__icon--dark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2"/><path d="M12 20v2"/>
+            <path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/>
+            <path d="M2 12h2"/><path d="M20 12h2"/>
+            <path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>
+          </svg>
+        </button>
+      </div>
+    </footer>
+  </div>
+
+  <script src="../wasm_exec.js"></script>
+  <script src="../receipt-explorer.js"></script>
+  <script src="advanced.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
