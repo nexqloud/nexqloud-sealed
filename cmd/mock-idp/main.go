@@ -53,7 +53,11 @@ func main() {
 		if t == "" {
 			t = *tenantID
 		}
-		token := mintJWT(key, t, randomNonce())
+		purpose := r.URL.Query().Get("purpose")
+		if purpose == "" {
+			purpose = "delete"
+		}
+		token := mintJWT(key, t, randomNonce(), purpose)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"jwt":       token,
@@ -79,7 +83,7 @@ func main() {
 		n = randomNonce()
 	}
 
-	token := mintJWT(key, *tenantID, n)
+	token := mintJWT(key, *tenantID, n, "delete")
 	fmt.Printf("JWKS_URL=%s\n", jwksURL)
 	fmt.Printf("TENANT_ID=%s\n", *tenantID)
 	fmt.Printf("NONCE=%s\n", n)
@@ -139,13 +143,19 @@ func buildJWKS(key *rsa.PrivateKey) map[string]any {
 	}
 }
 
-func mintJWT(key *rsa.PrivateKey, tenantID, nonce string) string {
+func mintJWT(key *rsa.PrivateKey, tenantID, nonce, purpose string) string {
 	claims := jwt.MapClaims{
 		"tenant_id": tenantID,
-		"purpose":   "delete",
+		"sub":       tenantID,
 		"nonce":     nonce,
 		"iat":       time.Now().Unix(),
 		"exp":       time.Now().Add(24 * time.Hour).Unix(),
+	}
+	switch purpose {
+	case "inference":
+		claims["aud"] = "nexqloud-inference"
+	default:
+		claims["purpose"] = "delete"
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = keyID

@@ -5,6 +5,7 @@ go 1.26.4
 require (
 	github.com/go-openapi/strfmt v0.26.2
 	github.com/go-openapi/swag/conv v0.26.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-sev-guest v0.15.0
 	github.com/google/go-tpm v0.9.8
 	github.com/google/uuid v1.6.0
@@ -38,7 +39,6 @@ require (
 	github.com/go-openapi/swag/yamlutils v0.26.0 // indirect
 	github.com/go-openapi/validate v0.25.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/go-configfs-tsm v0.2.2 // indirect
 	github.com/google/go-containerregistry v0.20.7 // indirect
 	github.com/google/logger v1.1.1 // indirect

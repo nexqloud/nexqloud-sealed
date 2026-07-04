@@ -25,9 +25,10 @@ const (
 )
 
 type Input struct {
-	Prompt         string
-	Response       string
-	ChallengeNonce string
+	Prompt             string
+	Response           string
+	ChallengeNonce     string
+	IdentityClaimHash  string
 }
 
 type Builder struct {
@@ -65,6 +66,11 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		measurement = hex.EncodeToString(att.Report.Measurement)
 	}
 
+	identityHash := in.IdentityClaimHash
+	if identityHash == "" {
+		identityHash = dummyIdentityClaim
+	}
+
 	pkg := Package{
 		Schema:             schemaVersion,
 		ReceiptID:          uuid.NewString(),
@@ -75,7 +81,7 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		EnclaveMeasurement: measurement,
 		GPUPolicyHash:      policyHash,
 		ZeroizationCert:    gpu.RequestZeroization(),
-		IdentityClaimHash:  dummyIdentityClaim,
+		IdentityClaimHash:  identityHash,
 		Nonce:              nonceHex,
 	}
 

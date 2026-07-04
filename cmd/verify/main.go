@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/ed25519"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -11,14 +9,16 @@ import (
 	"github.com/google/go-sev-guest/proto/sevsnp"
 	"google.golang.org/protobuf/encoding/protojson"
 
-	"nexqloud-sealed/internal/receipt"
-	"nexqloud-sealed/internal/verify"
+	iv "nexqloud-sealed/internal/verify"
+	pkgverify "nexqloud-sealed/pkg/verify"
 )
 
 func main() {
+	challenge := flag.String("challenge", "", "expected freshness nonce (hex)")
 	askPath := flag.String("ask", "", "path to AMD ASK root certificate (DER)")
 	arkPath := flag.String("ark", "", "path to AMD ARK root certificate (DER)")
 	productLine := flag.String("product", "", "AMD product line for custom roots (e.g. Milan, Genoa)")
+	noColor := flag.Bool("no-color", false, "disable ANSI colors")
 	flag.Parse()
 
 	args := flag.Args()
@@ -33,81 +33,62 @@ func main() {
 		os.Exit(1)
 	}
 
-	var wrapper receipt.SealedReceipt
-	if err := json.Unmarshal(data, &wrapper); err != nil {
-		fmt.Fprintf(os.Stderr, "parse receipt: %v\n", err)
-		os.Exit(1)
-	}
-
-	pub, err := hex.DecodeString(wrapper.Pubkey)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "decode pubkey: %v\n", err)
-		os.Exit(1)
-	}
-	if len(pub) != ed25519.PublicKeySize {
-		fmt.Fprintf(os.Stderr, "invalid pubkey length: %d\n", len(pub))
-		os.Exit(1)
-	}
-
-	nonce, err := hex.DecodeString(wrapper.Package.Nonce)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "decode nonce: %v\n", err)
-		os.Exit(1)
-	}
-
-	att := &sevsnp.Attestation{}
-	if len(wrapper.Attestation) > 0 && string(wrapper.Attestation) != "{}" {
-		if err := protojson.Unmarshal(wrapper.Attestation, att); err != nil {
-			fmt.Fprintf(os.Stderr, "parse attestation: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
-	roots, err := loadHardwareRoots(*askPath, *arkPath, *productLine)
+	catalog, err := pkgverify.LoadHardwareRootsCatalog()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load AMD roots: %v\n", err)
 		os.Exit(1)
 	}
 
-	rc := verify.AttestationReceipt{
-		Attestation: att,
-		CertChain:   wrapper.CertChain,
-	}
-	pins := verify.Pins{
-		Nonce:              nonce,
-		EnclaveMeasurement: wrapper.Package.EnclaveMeasurement,
-		ModelCommitment:    wrapper.Package.ModelCommitment,
+	product := *productLine
+	if *askPath != "" || *arkPath != "" {
+		if *askPath == "" || *arkPath == "" {
+			fmt.Fprintf(os.Stderr, "both --ask and --ark are required when providing custom AMD roots\n")
+			os.Exit(1)
+		}
+		ask, err := os.ReadFile(*askPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "read ASK: %v\n", err)
+			os.Exit(1)
+		}
+		ark, err := os.ReadFile(*arkPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "read ARK: %v\n", err)
+			os.Exit(1)
+		}
+		if product == "" {
+			product, err = inferProductLine(data)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "infer product line: %v (use --product)\n", err)
+				os.Exit(1)
+			}
+		}
+		catalog = pkgverify.ApplyCustomHardwareRoots(catalog, product, ask, ark)
 	}
 
-	result := verify.Verify(rc, ed25519.PublicKey(pub), pins, wrapper.RuntimeClaimsJSON, roots)
-	if !result.OK {
-		fmt.Fprintf(os.Stderr, "%s\n", result.Reason)
+	result := pkgverify.VerifyReceiptJSON(data, *challenge, catalog)
+	if result.Error != "" {
+		fmt.Fprintf(os.Stderr, "%s\n", result.Error)
 		os.Exit(1)
 	}
 
-	fmt.Printf("VERIFIED — receipt %s is authentic.\n", wrapper.Package.ReceiptID)
+	printResults(os.Stdout, result, *challenge, useColor(*noColor))
+	if !result.OverallOK {
+		os.Exit(1)
+	}
 }
 
-func loadHardwareRoots(askPath, arkPath, productLine string) (verify.HardwareRoots, error) {
-	if askPath == "" && arkPath == "" {
-		return verify.HardwareRoots{}, nil
+func inferProductLine(receiptJSON []byte) (string, error) {
+	var wrapper struct {
+		Attestation json.RawMessage `json:"attestation"`
 	}
-	if askPath == "" || arkPath == "" {
-		return verify.HardwareRoots{}, fmt.Errorf("both --ask and --ark are required when providing custom AMD roots")
+	if err := json.Unmarshal(receiptJSON, &wrapper); err != nil {
+		return "", err
 	}
-
-	ask, err := os.ReadFile(askPath)
-	if err != nil {
-		return verify.HardwareRoots{}, err
+	att := &sevsnp.Attestation{}
+	if len(wrapper.Attestation) > 0 && string(wrapper.Attestation) != "{}" {
+		if err := protojson.Unmarshal(wrapper.Attestation, att); err != nil {
+			return "", err
+		}
 	}
-	ark, err := os.ReadFile(arkPath)
-	if err != nil {
-		return verify.HardwareRoots{}, err
-	}
-
-	return verify.HardwareRoots{
-		ProductLine: productLine,
-		ASK:         ask,
-		ARK:         ark,
-	}, nil
+	return iv.ProductLineFromReport(att)
 }

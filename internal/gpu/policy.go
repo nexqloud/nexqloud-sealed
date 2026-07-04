@@ -10,11 +10,11 @@ import (
 )
 
 type Policy struct {
-	PolicyVersion   string `json:"policy_version"`
-	Persistence     string `json:"persistence"`
-	NetworkEgress   string `json:"network_egress"`
-	PayloadLogging  string `json:"payload_logging"`
-	Model           string `json:"model"`
+	PolicyVersion  string `json:"policy_version"`
+	Persistence    string `json:"persistence"`
+	NetworkEgress  string `json:"network_egress"`
+	PayloadLogging string `json:"payload_logging"`
+	Model          string `json:"model"`
 }
 
 func DefaultPolicy() Policy {
@@ -42,6 +42,10 @@ func Hash(p Policy) (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
+// RequestZeroization asks the GPU worker to overwrite its VRAM buffers
+// and return a signed clearance cert. The real overwrite lives in the
+// worker (next to vLLM); the shim collects and embeds the cert.
+// TODO: implement real zeroization
 func RequestZeroization() map[string]any {
 	return map[string]any{
 		"clearance_id": "mock-clearance-0001",
