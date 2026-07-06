@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"nexqloud-sealed/internal/devmode"
 	"nexqloud-sealed/internal/enclave"
 	"nexqloud-sealed/internal/identity"
 	"nexqloud-sealed/internal/inference"
@@ -30,8 +31,13 @@ type server struct {
 func main() {
 	jwksURL := flag.String("jwks", strings.TrimSpace(os.Getenv("NEXQLOUD_JWKS_URL")), "customer IdP JWKS URL for X-NexQloud-Identity")
 	tenantID := flag.String("tenant", strings.TrimSpace(os.Getenv("NEXQLOUD_TENANT_ID")), "optional tenant_id to require in identity JWT")
+	dev := flag.Bool("dev", devmode.Enabled(), "allow dev fallbacks (or set NEXQLOUD_DEV=1)")
 	addr := flag.String("addr", envOr("NEXQLOUD_SHIM_ADDR", defaultAddr), "listen address")
 	flag.Parse()
+
+	if *dev {
+		_ = os.Setenv("NEXQLOUD_DEV", "1")
+	}
 
 	priv, pub, err := enclave.Key()
 	if err != nil {
@@ -52,7 +58,10 @@ func main() {
 	}
 
 	if srv.jwksURL == "" {
-		log.Printf("identity: JWKS not configured; %s optional, receipts use placeholder identity_claim_hash", identity.HeaderNexQloudIdentity)
+		if !devmode.Enabled() {
+			log.Fatal("NEXQLOUD_JWKS_URL (or -jwks) is required in production")
+		}
+		log.Printf("identity: dev mode — %s optional, receipts may use placeholder identity_claim_hash", identity.HeaderNexQloudIdentity)
 	} else {
 		log.Printf("identity: verifying %s against JWKS %s", identity.HeaderNexQloudIdentity, srv.jwksURL)
 		if srv.tenantID != "" {
@@ -62,7 +71,7 @@ func main() {
 
 	http.HandleFunc("/v1/chat/completions", srv.handleChatCompletions)
 
-	log.Printf("sealed-shim listening on %s (inference=%T)", *addr, srv.inference)
+	log.Printf("sealed-shim listening on %s (inference=%T, dev=%v)", *addr, srv.inference, devmode.Enabled())
 	log.Fatal(http.ListenAndServe(*addr, nil))
 }
 
@@ -77,6 +86,9 @@ func selectInferenceBackend() inference.Backend {
 	if url := os.Getenv("VLLM_URL"); url != "" {
 		log.Printf("inference backend: vLLM at %s", url)
 		return inference.NewVLLM(url)
+	}
+	if !devmode.Enabled() {
+		log.Fatal("VLLM_URL is required in production (or set NEXQLOUD_DEV=1 for mock inference)")
 	}
 	log.Printf("inference backend: mock (set VLLM_URL to use real vLLM)")
 	return inference.NewMock()
@@ -160,6 +172,9 @@ func (s *server) verifyIdentity(r *http.Request) (string, error) {
 	if s.jwksURL == "" {
 		if token != "" {
 			log.Printf("identity: ignoring %s (JWKS not configured)", identity.HeaderNexQloudIdentity)
+		}
+		if !devmode.Enabled() {
+			return "", errIdentity("JWKS not configured")
 		}
 		return "", nil
 	}

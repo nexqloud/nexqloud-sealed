@@ -1,0 +1,350 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+step() {
+  echo ""
+  echo "============================================================"
+  echo "  $*"
+  echo "============================================================"
+}
+
+substep() {
+  echo "  -> $*"
+}
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+script_dir() {
+  cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
+}
+
+default_repo_root() {
+  local d
+  d="$(script_dir)"
+  cd "$d/../.." && pwd
+}
+
+load_env() {
+  local env_file="$1"
+  if [[ -f "$env_file" ]]; then
+    substep "Loading $env_file"
+    # shellcheck disable=SC1090
+    source "$env_file"
+  fi
+  export NEXQLOUD_DEV="${NEXQLOUD_DEV:-1}"
+}
+
+require_var() {
+  local name="$1"
+  if [[ -z "${!name:-}" ]]; then
+    die "Set $name in your env file or export it before running this script."
+  fi
+}
+
+default_demo_bin_dir() {
+  echo "${HOME}/.cache/nexqloud-destruction-demo/bin"
+}
+
+ensure_run_dir() {
+  mkdir -p "$RUN_DIR/logs" "$RUN_DIR/state/operator-a" "$RUN_DIR/state/operator-b"
+}
+
+ensure_demo_bin_dir() {
+  DEMO_BIN_DIR="${DEMO_BIN_DIR:-$(default_demo_bin_dir)}"
+  mkdir -p "$DEMO_BIN_DIR"
+  local probe="$DEMO_BIN_DIR/.exec-probe"
+  printf '#!/bin/sh\nexit 0\n' >"$probe"
+  chmod +x "$probe"
+  if ! "$probe" 2>/dev/null; then
+    rm -f "$probe"
+    die "Cannot execute binaries in DEMO_BIN_DIR=$DEMO_BIN_DIR — pick a directory on an exec-mounted filesystem (e.g. under \$HOME)."
+  fi
+  rm -f "$probe"
+}
+
+# Rebuild cached binaries after git pull or script changes.
+ensure_demo_bins_current() {
+  ensure_demo_bin_dir
+  local marker="$DEMO_BIN_DIR/.build-marker"
+  local current=""
+  if current="$(cd "$REPO_ROOT" && git rev-parse HEAD 2>/dev/null)"; then
+    :
+  else
+    current="$(stat -c %Y "$REPO_ROOT/demo/two-vm/common.sh" 2>/dev/null || echo 0)"
+  fi
+  if [[ ! -f "$marker" ]] || [[ "$(cat "$marker")" != "$current" ]]; then
+    substep "Source changed — clearing cached demo binaries in $DEMO_BIN_DIR"
+    find "$DEMO_BIN_DIR" -maxdepth 1 -type f ! -name '.build-marker' -delete 2>/dev/null || true
+    echo "$current" >"$marker"
+  fi
+}
+
+build_demo_bin() {
+  local name="$1"
+  local pkg_path="$2"
+  ensure_demo_bin_dir
+  local out="$DEMO_BIN_DIR/$name"
+  local main_go="$REPO_ROOT/${pkg_path#./}"
+  local pkg_dir
+  pkg_dir="$(dirname "$main_go")"
+  local stale=0
+  if [[ ! -x "$out" ]]; then
+    stale=1
+  elif [[ "$main_go" -nt "$out" ]]; then
+    stale=1
+  elif find "$pkg_dir" -name '*.go' -newer "$out" -print -quit 2>/dev/null | grep -q .; then
+    stale=1
+  fi
+  if [[ "$stale" -eq 1 ]]; then
+    substep "Building $name → $out" >&2
+    if ! (cd "$REPO_ROOT" && go build -o "$out" "$pkg_path"); then
+      die "go build failed for $name (package $pkg_path)"
+    fi
+  fi
+  printf '%s\n' "$out"
+}
+
+start_service_or_die() {
+  local name="$1"
+  shift
+  if ! start_service "$name" "$@"; then
+    die "$name failed to start — see $(log_file "$name")"
+  fi
+}
+
+# Return PIDs listening on a TCP port (Linux ss).
+pids_on_port() {
+  local port="$1"
+  ss -ltnp 2>/dev/null | grep ":${port}" | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u
+}
+
+service_port() {
+  case "$1" in
+    registry) echo 7001 ;;
+    mock-idp) echo 7200 ;;
+    aggregator) echo 7004 ;;
+    coordinator) echo 7003 ;;
+    operator-a) echo 7101 ;;
+    operator-b) echo 7102 ;;
+    *) echo "" ;;
+  esac
+}
+
+running_pids() {
+  local name="$1"
+  local pf pid port p
+  pf="$(pid_file "$name")"
+  if [[ -f "$pf" ]]; then
+    pid="$(cat "$pf")"
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "$pid"
+      return 0
+    fi
+  fi
+  port="$(service_port "$name")"
+  if [[ -n "$port" ]]; then
+    for p in $(pids_on_port "$port"); do
+      echo "$p"
+    done
+  fi
+}
+
+is_running() {
+  local name="$1"
+  [[ -n "$(running_pids "$name" | head -1)" ]]
+}
+
+start_service() {
+  local name="$1"
+  shift
+  local pf log pid port
+  pf="$(pid_file "$name")"
+  log="$(log_file "$name")"
+
+  if is_running "$name"; then
+    pid="$(running_pids "$name" | head -1)"
+    echo "$pid" >"$pf"
+    substep "$name already running (pid $pid)"
+    return 0
+  fi
+
+  substep "Starting $name ..."
+  port="$(service_port "$name")"
+  if [[ -n "$port" ]]; then
+    local orphan
+    for orphan in $(pids_on_port "$port"); do
+      substep "Clearing orphan on :$port (pid $orphan) ..."
+      kill "$orphan" 2>/dev/null || true
+      sleep 0.5
+      kill -9 "$orphan" 2>/dev/null || true
+    done
+  fi
+  : >"$log"
+  "$@" >>"$log" 2>&1 &
+  pid=$!
+  echo "$pid" >"$pf"
+  sleep 1
+
+  if kill -0 "$pid" 2>/dev/null; then
+    substep "$name running — pid $pid"
+    substep "log: $log"
+    return 0
+  fi
+
+  # go run spawns a child; recover listener pid from port if configured
+  port="$(service_port "$name")"
+  if [[ -n "$port" ]]; then
+    pid="$(pids_on_port "$port" | head -1)"
+    if [[ -n "$pid" ]]; then
+      echo "$pid" >"$pf"
+      substep "$name running — pid $pid (tracked via :$port)"
+      substep "log: $log"
+      return 0
+    fi
+  fi
+
+  substep "$name failed to start — last log lines:"
+  tail -20 "$log" >&2 || true
+  if grep -qi 'permission denied\|noexec\|text file busy' "$log" 2>/dev/null; then
+    substep "Hint: binaries live in DEMO_BIN_DIR=${DEMO_BIN_DIR:-$(default_demo_bin_dir)} (not RUN_DIR). If this path is not executable, set DEMO_BIN_DIR in your env file." >&2
+  fi
+  rm -f "$pf"
+  return 1
+}
+
+stop_service() {
+  local name="$1"
+  local pf port killed=0
+  pf="$(pid_file "$name")"
+
+  if [[ -f "$pf" ]]; then
+    local pid
+    pid="$(cat "$pf")"
+    if kill -0 "$pid" 2>/dev/null; then
+      substep "Stopping $name (pid $pid) ..."
+      kill "$pid" 2>/dev/null || true
+      sleep 1
+      kill -9 "$pid" 2>/dev/null || true
+      killed=1
+    fi
+    rm -f "$pf"
+  fi
+
+  port="$(service_port "$name")"
+  if [[ -n "$port" ]]; then
+    local pid
+    for pid in $(pids_on_port "$port"); do
+      substep "Stopping $name orphan on :$port (pid $pid) ..."
+      kill "$pid" 2>/dev/null || true
+      sleep 1
+      kill -9 "$pid" 2>/dev/null || true
+      killed=1
+    done
+  fi
+
+  if [[ "$killed" -eq 0 ]]; then
+    substep "$name: not running"
+  fi
+}
+
+pid_file() {
+  echo "$RUN_DIR/$1.pid"
+}
+
+log_file() {
+  echo "$RUN_DIR/logs/$1.log"
+}
+
+wait_http() {
+  local url="$1"
+  local tries="${2:-30}"
+  local i
+  for ((i = 1; i <= tries; i++)); do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+coordinator_pubkey_hex() {
+  local seed_hex="$1"
+  (
+    cd "$REPO_ROOT"
+    go run ./demo/two-vm/coordinator_pubkey.go "$seed_hex"
+  )
+}
+
+save_destruction_receipts() {
+  local agg_url="$1"
+  local destruction_id="$2"
+  local receipts_dir="$3"
+  rm -rf "${receipts_dir:?}"
+  mkdir -p "$receipts_dir"
+  local raw
+  raw="$(curl -fsS "${agg_url}/destructions/${destruction_id}/receipts")"
+  if command -v jq >/dev/null; then
+    local count=0
+    while IFS= read -r rcpt; do
+      local op
+      op="$(echo "$rcpt" | jq -r '.package.operator_id')"
+      echo "$rcpt" | jq . >"${receipts_dir}/${op}.json"
+      count=$((count + 1))
+    done < <(echo "$raw" | jq -c '.receipts[]')
+    substep "Saved $count receipt(s) → $receipts_dir/"
+  else
+    echo "$raw" >"${receipts_dir}/all.json"
+    substep "Saved receipts bundle → ${receipts_dir}/all.json (install jq to split per-operator files)"
+  fi
+}
+
+refresh_customer_jwt() {
+  local vm1_ip="$1"
+  local tenant_id="$2"
+  local run_dir="$3"
+  local jwks_url="$4"
+  local raw jwt url
+  for url in "http://127.0.0.1:7200/token?tenant=${tenant_id}" "http://${vm1_ip}:7200/token?tenant=${tenant_id}"; do
+    if raw="$(curl -fsS "$url" 2>/dev/null)"; then
+      if command -v jq >/dev/null; then
+        jwt="$(echo "$raw" | jq -r '.jwt')"
+      else
+        jwt="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["jwt"])' <<<"$raw" 2>/dev/null || true)"
+      fi
+      if [[ -n "$jwt" && "$jwt" != "null" ]]; then
+        cat >"${run_dir}/credentials.env" <<EOF
+JWKS_URL=${jwks_url}
+CUSTOMER_JWT=${jwt}
+TENANT_ID=${tenant_id}
+EOF
+        CUSTOMER_JWT="$jwt"
+        substep "Refreshed customer JWT from ${url%%\?*}"
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+post_coordinator_destruction() {
+  local url="$1"
+  local tenant_id="$2"
+  local customer_sig_b64="$3"
+  local nonce="$4"
+  local tmp body code
+  tmp="$(mktemp)"
+  code="$(curl -sS -w '%{http_code}' -o "$tmp" -X POST "$url" \
+    -H 'Content-Type: application/json' \
+    -d "{\"tenant_id\":\"${tenant_id}\",\"customer_sig\":\"${customer_sig_b64}\",\"nonce\":\"${nonce}\"}")"
+  body="$(cat "$tmp")"
+  rm -f "$tmp"
+  if [[ "$code" != "201" ]]; then
+    echo "$body" >&2
+    die "coordinator returned HTTP ${code}: ${body:-<empty body>}"
+  fi
+  echo "$body"
+}

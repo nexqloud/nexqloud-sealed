@@ -1,0 +1,59 @@
+# Component tiers
+
+This document classifies every deployable binary and major package so demo scaffolding is easy to distinguish from production code.
+
+## Layout
+
+| Path | Role |
+|------|------|
+| `cmd/` | Production services and audit CLIs |
+| `demo/` | Demo-only binaries and scripts (never ship to production) |
+| `internal/derive/` | Invention 1 — federated per-tenant key derivation |
+| `internal/receipt/` + `internal/inference/` | Invention 2 — attested inference receipts |
+| `internal/erasure/` | Invention 3 — federated cryptographic erasure |
+| `internal/enclave/`, `internal/identity/`, `internal/registry/` | Shared platform plumbing |
+| `pkg/verify/` | Public verification library (native + WASM) |
+| `web/` | Browser verifier UI |
+
+## Production (`cmd/`)
+
+| Binary | Invention | Tier | Purpose |
+|--------|-----------|------|---------|
+| `shim` | 2 | **prod** | Inference API + per-request sealed receipt |
+| `operator` | 3 (+ derive later) | **prod** | TEE operator HTTP server (`/destruction`); run one instance per federation operator (`-operator-id`) |
+| `destruction-coordinator` | 3 | **prod** | Customer delete JWT gate + dispatch to operators |
+| `destruction-aggregator` | 3 | **prod** | Collect operator destruction receipts → unified proof |
+| `verify` | 2 | **tooling** | CLI verifier for inference / derivation receipts |
+| `sealed-verify-deletion` | 3 | **tooling** | CLI verifier for destruction proofs |
+
+## Demo (`demo/`)
+
+| Binary / script | Replaced in production by |
+|-----------------|---------------------------|
+| `demo/mock-idp` | Customer IdP JWKS |
+| `demo/registry` + `demo/registry/memstore` | Persistent registry service |
+| `demo/bootstrap` | Tenant onboarding API / ops workflow |
+| `demo/two-vm/` | Internal staging / sales demos only |
+
+## Dev mode
+
+Set `NEXQLOUD_DEV=1` (or `shim --dev`) to allow mock inference, placeholder receipt fields, and test attestation fallbacks. **Production deployments must not set this.**
+
+Demo scripts export `NEXQLOUD_DEV=1` automatically via `demo/two-vm/common.sh`.
+
+## Operator model
+
+Run **one** `operator` binary per federation member:
+
+```bash
+operator -operator-id operator-a -addr :7101 -state-dir /var/sealed/operator-a ...
+operator -operator-id operator-b -addr :7102 -state-dir /var/sealed/operator-b ...
+```
+
+The destruction coordinator takes a dispatch map: `operator-a=http://host:7101,operator-b=http://host:7102`.
+
+## Three inventions (quick reference)
+
+1. **Federated per-tenant key derivation** — seed committed to registry, per-operator chip wraps, HKDF DEK (`internal/derive/`).
+2. **Per-inference attested receipt** — SNP attestation + signed receipt per request (`cmd/shim`, `internal/receipt/`).
+3. **Federated cryptographic erasure** — customer auth → all operators zeroize → aggregated proof (`internal/erasure/`, coordinator/aggregator/operator).

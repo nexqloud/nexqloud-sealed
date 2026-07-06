@@ -1,8 +1,11 @@
 package gpu
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestHashDeterministic(t *testing.T) {
+	t.Setenv("NEXQLOUD_DEV", "1")
 	p := DefaultPolicy()
 	a, err := Hash(p)
 	if err != nil {
@@ -21,8 +24,19 @@ func TestHashDeterministic(t *testing.T) {
 }
 
 func TestRequestZeroizationMock(t *testing.T) {
-	cert := RequestZeroization()
+	t.Setenv("NEXQLOUD_DEV", "1")
+	cert, err := RequestZeroization()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cert["signature"] == nil {
 		t.Fatal("expected mock signature in clearance certificate")
+	}
+}
+
+func TestRequestZeroizationRequiresProdIntegration(t *testing.T) {
+	t.Setenv("NEXQLOUD_DEV", "0")
+	if _, err := RequestZeroization(); err == nil {
+		t.Fatal("expected error without NEXQLOUD_DEV")
 	}
 }

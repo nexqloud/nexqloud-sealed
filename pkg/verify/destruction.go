@@ -14,7 +14,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"nexqloud-sealed/internal/attest"
-	"nexqloud-sealed/internal/destruction"
+	"nexqloud-sealed/internal/erasure/destruction"
 	"nexqloud-sealed/internal/registry"
 )
 

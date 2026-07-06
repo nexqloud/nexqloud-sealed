@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"nexqloud-sealed/internal/attest"
-	"nexqloud-sealed/internal/destruction"
-	"nexqloud-sealed/internal/destroy"
+	"nexqloud-sealed/internal/erasure/destruction"
+	"nexqloud-sealed/internal/erasure/destroy"
 	"nexqloud-sealed/pkg/verify"
 )
 

@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"nexqloud-sealed/internal/destruction"
+	"nexqloud-sealed/internal/erasure/destruction"
 )
 
 func main() {
@@ -53,6 +53,14 @@ func main() {
 			default:
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			}
+			return
+		}
+		if len(parts) == 2 && parts[1] == "exclusions" {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			handleExcludeOperator(w, r, agg, id)
 			return
 		}
 		if len(parts) == 2 && parts[1] == "aggregate" {
@@ -128,6 +136,32 @@ func handleSubmitReceipt(w http.ResponseWriter, r *http.Request, agg *destructio
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"status": "receipt stored",
+	})
+}
+
+func handleExcludeOperator(w http.ResponseWriter, r *http.Request, agg *destruction.Aggregator, destructionID string) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		OperatorID string `json:"operator_id"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	if err := agg.ExcludeOperator(destructionID, req.OperatorID); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"destruction_id": destructionID,
+		"operator_id":    req.OperatorID,
+		"status":         "excluded",
 	})
 }
 

@@ -436,6 +436,28 @@ func checkModelLegit(pkg map[string]any) Check {
 	return check
 }
 
+func referencePolicyHashes() ([]string, error) {
+	candidates := []gpu.Policy{gpu.DevReferencePolicy()}
+	if prod := gpu.DefaultPolicy(); prod.Model != "" {
+		candidates = append(candidates, prod)
+	}
+
+	seen := make(map[string]struct{})
+	var hashes []string
+	for _, p := range candidates {
+		h, err := gpu.Hash(p)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[h]; ok {
+			continue
+		}
+		seen[h] = struct{}{}
+		hashes = append(hashes, h)
+	}
+	return hashes, nil
+}
+
 func checkGPUWiped(pkg map[string]any) Check {
 	check := Check{
 		ID:    "gpu_wiped",
@@ -443,14 +465,21 @@ func checkGPUWiped(pkg map[string]any) Check {
 	}
 
 	policyHash, _ := pkg["gpu_policy_hash"].(string)
-	expectedHash, err := gpu.Hash(gpu.DefaultPolicy())
+	expectedHashes, err := referencePolicyHashes()
 	if err != nil {
 		check.Detail = err.Error()
 		return check
 	}
 
 	check.Hash = truncateHex(stringsTrimPrefix(policyHash, "sha256:"))
-	if policyHash != expectedHash {
+	matched := false
+	for _, expectedHash := range expectedHashes {
+		if policyHash == expectedHash {
+			matched = true
+			break
+		}
+	}
+	if !matched {
 		check.Detail = "gpu_policy_hash mismatch"
 		return check
 	}
@@ -461,14 +490,9 @@ func checkGPUWiped(pkg map[string]any) Check {
 		return check
 	}
 
-	mock := gpu.RequestZeroization()
 	for _, key := range []string{"clearance_id", "gpu_id", "wiped_at", "signature", "issuer"} {
 		if certRaw[key] == nil || certRaw[key] == "" {
 			check.Detail = fmt.Sprintf("zeroization_cert missing %s", key)
-			return check
-		}
-		if mock[key] != certRaw[key] {
-			check.Detail = fmt.Sprintf("zeroization_cert %s mismatch", key)
 			return check
 		}
 	}

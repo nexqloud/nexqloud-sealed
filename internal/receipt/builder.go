@@ -8,10 +8,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"nexqloud-sealed/internal/devmode"
 	"nexqloud-sealed/internal/enclave"
 	"nexqloud-sealed/internal/gpu"
 	"nexqloud-sealed/internal/tlog"
@@ -61,14 +64,33 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		return nil, fmt.Errorf("attestation: %w", err)
 	}
 
-	measurement := placeholderMeasure
+	measurement := ""
 	if att != nil && att.Report != nil && len(att.Report.Measurement) > 0 {
 		measurement = hex.EncodeToString(att.Report.Measurement)
+	}
+	if measurement == "" {
+		if !devmode.Enabled() {
+			return nil, fmt.Errorf("enclave measurement missing (set NEXQLOUD_DEV=1 for local fallback)")
+		}
+		measurement = placeholderMeasure
 	}
 
 	identityHash := in.IdentityClaimHash
 	if identityHash == "" {
+		if !devmode.Enabled() {
+			return nil, fmt.Errorf("identity_claim_hash required (set NEXQLOUD_DEV=1 to allow placeholder)")
+		}
 		identityHash = dummyIdentityClaim
+	}
+
+	modelCommit, err := resolveModelCommitment()
+	if err != nil {
+		return nil, err
+	}
+
+	zeroCert, err := gpu.RequestZeroization()
+	if err != nil {
+		return nil, err
 	}
 
 	pkg := Package{
@@ -77,10 +99,10 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		Timestamp:          time.Now().UTC().Format(time.RFC3339),
 		PromptHash:         digest(in.Prompt),
 		ResponseHash:       digest(in.Response),
-		ModelCommitment:    dummyModelCommit,
+		ModelCommitment:    modelCommit,
 		EnclaveMeasurement: measurement,
 		GPUPolicyHash:      policyHash,
-		ZeroizationCert:    gpu.RequestZeroization(),
+		ZeroizationCert:    zeroCert,
 		IdentityClaimHash:  identityHash,
 		Nonce:              nonceHex,
 	}
@@ -139,4 +161,14 @@ func packageMap(pkg Package) (map[string]any, error) {
 func digest(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func resolveModelCommitment() (string, error) {
+	if v := strings.TrimSpace(os.Getenv("NEXQLOUD_MODEL_COMMIT")); v != "" {
+		return v, nil
+	}
+	if devmode.Enabled() {
+		return dummyModelCommit, nil
+	}
+	return "", fmt.Errorf("NEXQLOUD_MODEL_COMMIT is required in production")
 }

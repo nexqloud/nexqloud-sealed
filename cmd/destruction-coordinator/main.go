@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"nexqloud-sealed/internal/destruction"
+	"nexqloud-sealed/internal/erasure/destruction"
 	"nexqloud-sealed/internal/registry"
 )
 

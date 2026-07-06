@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"nexqloud-sealed/internal/destruction"
+	"nexqloud-sealed/internal/erasure/destruction"
 	pkgverify "nexqloud-sealed/pkg/verify"
 )
 
