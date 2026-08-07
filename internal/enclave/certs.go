@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/google/go-sev-guest/abi"
+	"github.com/google/go-sev-guest/kds"
 	"github.com/google/go-sev-guest/proto/sevsnp"
 	sevverify "github.com/google/go-sev-guest/verify"
+	"google.golang.org/protobuf/proto"
 )
 
 var hardwareCertCache = struct {
@@ -32,18 +35,93 @@ func fetchAndStoreCertificateChain(pub ed25519.PublicKey) error {
 		return fmt.Errorf("warmup attestation report: %w", err)
 	}
 
-	filled, err := sevverify.GetAttestationFromReport(att.Report, sevverify.DefaultOptions())
+	if hasFullChain(att.CertificateChain) {
+		hardwareCertCache.mu.Lock()
+		hardwareCertCache.chain = cloneCertificateChain(att.CertificateChain)
+		hardwareCertCache.mu.Unlock()
+		return nil
+	}
+
+	filled, productLine, err := fetchCertificatesFromKDS(att)
 	if err != nil {
-		return fmt.Errorf("fetch certificates from AMD KDS: %w", err)
+		return err
 	}
 	if filled.CertificateChain == nil || !hasVCEK(filled.CertificateChain) {
-		return fmt.Errorf("AMD KDS returned attestation without VCEK certificate")
+		return fmt.Errorf("AMD KDS returned attestation without VCEK certificate (%s)", productLine)
 	}
 
 	hardwareCertCache.mu.Lock()
 	hardwareCertCache.chain = cloneCertificateChain(filled.CertificateChain)
 	hardwareCertCache.mu.Unlock()
 	return nil
+}
+
+func fetchCertificatesFromKDS(att *sevsnp.Attestation) (*sevsnp.Attestation, string, error) {
+	var lastErr error
+	for _, product := range kdsProductCandidates(att) {
+		line := kds.ProductLine(product)
+		report, ok := proto.Clone(att.Report).(*sevsnp.Report)
+		if !ok || report == nil {
+			return nil, "", fmt.Errorf("clone attestation report")
+		}
+		// go-sev-guest prefers report FMS over Options.Product when FMS != 0.
+		// Clear it so the candidate product actually drives the KDS URL.
+		report.Cpuid1EaxFms = 0
+
+		opts := sevverify.DefaultOptions()
+		opts.Product = product
+		filled, err := sevverify.GetAttestationFromReport(report, opts)
+		if err != nil {
+			lastErr = fmt.Errorf("%s: %w", line, err)
+			continue
+		}
+		if hasVCEK(filled.CertificateChain) {
+			return filled, line, nil
+		}
+		lastErr = fmt.Errorf("%s: missing VCEK", line)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no AMD SEV product candidates")
+	}
+	return nil, "", fmt.Errorf("fetch certificates from AMD KDS: %w", lastErr)
+}
+
+func kdsProductCandidates(att *sevsnp.Attestation) []*sevsnp.SevProduct {
+	seen := map[string]struct{}{}
+	var out []*sevsnp.SevProduct
+	add := func(p *sevsnp.SevProduct) {
+		if p == nil {
+			return
+		}
+		line := kds.ProductLine(p)
+		if line == "Unknown" {
+			return
+		}
+		if _, ok := seen[line]; ok {
+			return
+		}
+		seen[line] = struct{}{}
+		out = append(out, p)
+	}
+
+	if att != nil && att.Report != nil {
+		if fms := att.Report.GetCpuid1EaxFms(); fms != 0 {
+			add(abi.SevProductFromCpuid1Eax(fms))
+		}
+	}
+	if att != nil {
+		add(att.Product)
+	}
+	add(abi.SevProduct())
+
+	// Kata guests often expose an unmapped FMS/CPUID even on real EPYC hosts.
+	// Probe the known KDS product lines; the matching VCEK URL succeeds.
+	for _, line := range []string{"Milan", "Genoa", "Turin"} {
+		if p, err := kds.ParseProductLine(line); err == nil {
+			add(p)
+		}
+	}
+	return out
 }
 
 func AttachCertificateChain(att *sevsnp.Attestation) error {
@@ -97,4 +175,8 @@ func cloneCertificateChain(chain *sevsnp.CertificateChain) *sevsnp.CertificateCh
 
 func hasVCEK(chain *sevsnp.CertificateChain) bool {
 	return chain != nil && len(chain.VcekCert) > 0
+}
+
+func hasFullChain(chain *sevsnp.CertificateChain) bool {
+	return hasVCEK(chain) && len(chain.AskCert) > 0 && len(chain.ArkCert) > 0
 }

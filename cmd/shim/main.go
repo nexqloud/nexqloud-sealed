@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,7 @@ type server struct {
 	receipt   *receipt.Builder
 	jwksURL   string
 	tenantID  string
+	ready     atomic.Bool
 }
 
 func main() {
@@ -39,6 +41,37 @@ func main() {
 		_ = os.Setenv("NEXQLOUD_DEV", "1")
 	}
 
+	srv := &server{
+		jwksURL:  strings.TrimSpace(*jwksURL),
+		tenantID: strings.TrimSpace(*tenantID),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		status := "starting"
+		if srv.ready.Load() {
+			status = "ok"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": status})
+	})
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		if !srv.ready.Load() {
+			http.Error(w, "sealed-shim still starting", http.StatusServiceUnavailable)
+			return
+		}
+		srv.handleChatCompletions(w, r)
+	})
+
+	go func() {
+		log.Printf("sealed-shim listening on %s (health ready; attestation warmup continuing)", *addr)
+		log.Fatal(http.ListenAndServe(*addr, mux))
+	}()
+
 	priv, pub, err := enclave.Key()
 	if err != nil {
 		log.Fatalf("generate enclave key: %v", err)
@@ -50,12 +83,8 @@ func main() {
 	}
 	log.Printf("AMD certificate cache ready")
 
-	srv := &server{
-		inference: selectInferenceBackend(),
-		receipt:   receipt.NewBuilder(priv, pub),
-		jwksURL:   strings.TrimSpace(*jwksURL),
-		tenantID:  strings.TrimSpace(*tenantID),
-	}
+	srv.inference = selectInferenceBackend()
+	srv.receipt = receipt.NewBuilder(priv, pub)
 
 	if srv.jwksURL == "" {
 		if !devmode.Enabled() {
@@ -69,10 +98,9 @@ func main() {
 		}
 	}
 
-	http.HandleFunc("/v1/chat/completions", srv.handleChatCompletions)
-
-	log.Printf("sealed-shim listening on %s (inference=%T, dev=%v)", *addr, srv.inference, devmode.Enabled())
-	log.Fatal(http.ListenAndServe(*addr, nil))
+	srv.ready.Store(true)
+	log.Printf("sealed-shim ready (inference=%T, dev=%v)", srv.inference, devmode.Enabled())
+	select {}
 }
 
 func envOr(key, fallback string) string {
