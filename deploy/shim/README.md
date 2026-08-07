@@ -33,11 +33,11 @@ nerdctl run -d --name sealed-shim \
 `ghcr.io/nexqloud/nexqloud-sealed/sealed-shim`, then keyless-cosign signs the OCI
 digest into Rekor.
 
-| Git ref | Environment | Floating tag |
-|---------|-------------|--------------|
-| `stage` | staging | `:stage` |
-| `main` | production | `:latest` |
-| `v*` tags | production | semver (`:1.2.3`, `:1.2`) |
+| Git ref | Environment | Floating tag | Immutable |
+|---------|-------------|--------------|-----------|
+| `stage` | staging | `:stage` | `:sha-<commit>` |
+| `main` | production | `:latest` | `:sha-<commit>` |
+| `v*` tags | production | `:latest` + semver | `:sha-<commit>` |
 
 **Tier A (deferred):** Predict the AMD SEV-SNP launch measurement with
 `sev-snp-measure` over golden `OVMF.fd` + guest `bzImage` + workload initrd, then

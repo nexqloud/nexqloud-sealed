@@ -66,6 +66,7 @@ Image: `ghcr.io/nexqloud/nexqloud-sealed/sealed-shim` (workflow: `.github/workfl
 | `stage` | staging | `…/sealed-shim:stage` |
 | `main` | production | `…/sealed-shim:latest` |
 | `v*` | production | `…/sealed-shim:<semver>` |
+| any push | — | `…/sealed-shim:sha-<commit>` |
 
 ## Dev mode
 
