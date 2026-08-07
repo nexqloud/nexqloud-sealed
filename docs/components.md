@@ -61,6 +61,12 @@ nerdctl run -d --name sealed-shim \
 
 Image: `ghcr.io/nexqloud/nexqloud-sealed/sealed-shim` (workflow: `.github/workflows/shim-image.yml`).
 
+| Branch / tag | Env | Pull |
+|--------------|-----|------|
+| `stage` | staging | `…/sealed-shim:stage` |
+| `main` | production | `…/sealed-shim:latest` |
+| `v*` | production | `…/sealed-shim:<semver>` |
+
 ## Dev mode
 
 Set `NEXQLOUD_DEV=1` (or `shim --dev`) to allow mock inference, placeholder receipt fields, and test attestation fallbacks. **Production deployments must not set this.**

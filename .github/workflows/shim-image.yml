@@ -2,7 +2,7 @@ name: sealed-shim image
 
 on:
   push:
-    branches: [main]
+    branches: [main, stage]
     tags: ["v*"]
     paths:
       - "cmd/shim/**"
@@ -14,6 +14,7 @@ on:
       - ".dockerignore"
       - ".github/workflows/shim-image.yml"
   pull_request:
+    branches: [main, stage]
     paths:
       - "cmd/shim/**"
       - "internal/**"
@@ -36,9 +37,26 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/stage' && 'staging' || github.event_name == 'pull_request' && 'preview' || 'production' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Resolve deploy environment
+        id: env
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF}" in
+            refs/heads/stage)
+              echo "name=staging" >> "$GITHUB_OUTPUT"
+              ;;
+            refs/heads/main|refs/tags/v*)
+              echo "name=production" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "name=preview" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -56,8 +74,12 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_NAME }}
+          labels: |
+            org.opencontainers.image.title=sealed-shim
+            nexqloud.deploy.environment=${{ steps.env.outputs.name }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=stage,enable=${{ github.ref == 'refs/heads/stage' }}
             type=ref,event=branch
             type=ref,event=pr
             type=semver,pattern={{version}}
@@ -90,6 +112,7 @@ jobs:
             echo "missing image digest from build-push" >&2
             exit 1
           fi
+          echo "Signing ${IMAGE_NAME}@${DIGEST} for ${{ steps.env.outputs.name }}"
           cosign sign --yes "${IMAGE_NAME}@${DIGEST}"
 
       # Tier A (sev-snp-measure + expected launch measurement → Rekor) is deferred
