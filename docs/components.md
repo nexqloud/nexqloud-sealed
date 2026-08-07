@@ -19,7 +19,7 @@ This document classifies every deployable binary and major package so demo scaff
 
 | Binary | Invention | Tier | Purpose |
 |--------|-----------|------|---------|
-| `shim` | 2 | **prod** | Inference API + per-request sealed receipt |
+| `shim` | 2 | **prod** | Inference API + per-request sealed receipt (`deploy/shim` container image) |
 | `operator` | 3 (+ derive later) | **prod** | TEE operator HTTP server (`/destruction`); run one instance per federation operator (`-operator-id`) |
 | `destruction-coordinator` | 3 | **prod** | Customer delete JWT gate + dispatch to operators |
 | `destruction-aggregator` | 3 | **prod** | Collect operator destruction receipts → unified proof |
@@ -34,6 +34,32 @@ This document classifies every deployable binary and major package so demo scaff
 | `demo/registry` + `demo/registry/memstore` | Persistent registry service |
 | `demo/bootstrap` | Tenant onboarding API / ops workflow |
 | `demo/two-vm/` | Internal staging / sales demos only |
+
+## Shim container (Kata SNP)
+
+`deploy/shim/` builds a guest image for `kata-qemu-snp` (or any SNP guest). See
+[`deploy/shim/README.md`](../deploy/shim/README.md).
+
+- entrypoint mounts ConfigFS-TSM and creates `/dev/sev-guest`, then `exec`s `/usr/local/bin/sealed-shim`
+- runtime needs `CAP_SYS_ADMIN` + `CAP_MKNOD` (or `--privileged`) for that setup
+- CI **Tier B:** push OCI image to GHCR and keyless-cosign the digest into Rekor
+- CI **Tier A** (SNP launch measurement via `sev-snp-measure`) is deferred until golden guest firmware/kernel assets exist
+
+```bash
+make image-shim                          # sealed-shim:local
+# or: docker build -t sealed-shim:local -f deploy/shim/Dockerfile .
+
+nerdctl run -d --name sealed-shim \
+  --runtime io.containerd.run.kata-qemu-snp.v2 \
+  --annotation io.kubernetes.cri.image-name=docker.io/library/sealed-shim:local \
+  --cap-add SYS_ADMIN --cap-add MKNOD \
+  -p 8080:8080 \
+  -e NEXQLOUD_JWKS_URL=... \
+  -e VLLM_URL=... \
+  sealed-shim:local
+```
+
+Image: `ghcr.io/nexqloud/nexqloud-sealed/sealed-shim` (workflow: `.github/workflows/shim-image.yml`).
 
 ## Dev mode
 
