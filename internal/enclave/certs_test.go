@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/go-sev-guest/abi"
+	"github.com/google/go-sev-guest/kds"
 	"github.com/google/go-sev-guest/proto/sevsnp"
 )
 
@@ -33,5 +35,32 @@ func TestCachedCertificateChainRequiresWarm(t *testing.T) {
 
 	if _, err := cachedCertificateChain(); err == nil {
 		t.Fatal("expected error when cache is not warmed")
+	}
+}
+
+func TestSevProductFromFmsSienaMapsToGenoa(t *testing.T) {
+	fms := abi.FmsToCpuid1Eax(0x19, 0xa0, 2)
+	p := sevProductFromFms(fms)
+	if p == nil {
+		t.Fatal("expected Genoa product for Siena FMS")
+	}
+	if got := kds.ProductLine(p); got != "Genoa" {
+		t.Fatalf("product line = %q, want Genoa", got)
+	}
+	if p.MachineStepping == nil || p.MachineStepping.Value != 2 {
+		t.Fatalf("stepping = %v, want 2", p.MachineStepping)
+	}
+}
+
+func TestKdsProductCandidatesPrefersSienaAsGenoa(t *testing.T) {
+	fms := abi.FmsToCpuid1Eax(0x19, 0xa0, 2)
+	candidates := kdsProductCandidates(&sevsnp.Attestation{
+		Report: &sevsnp.Report{Cpuid1EaxFms: fms},
+	})
+	if len(candidates) == 0 {
+		t.Fatal("expected candidates")
+	}
+	if got := kds.ProductLine(candidates[0]); got != "Genoa" {
+		t.Fatalf("first candidate = %q, want Genoa", got)
 	}
 }

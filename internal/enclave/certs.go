@@ -4,6 +4,7 @@ package enclave
 
 import (
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/google/go-sev-guest/proto/sevsnp"
 	sevverify "github.com/google/go-sev-guest/verify"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 var hardwareCertCache = struct {
@@ -57,7 +59,7 @@ func fetchAndStoreCertificateChain(pub ed25519.PublicKey) error {
 }
 
 func fetchCertificatesFromKDS(att *sevsnp.Attestation) (*sevsnp.Attestation, string, error) {
-	var lastErr error
+	var errs []error
 	for _, product := range kdsProductCandidates(att) {
 		line := kds.ProductLine(product)
 		report, ok := proto.Clone(att.Report).(*sevsnp.Report)
@@ -65,25 +67,28 @@ func fetchCertificatesFromKDS(att *sevsnp.Attestation) (*sevsnp.Attestation, str
 			return nil, "", fmt.Errorf("clone attestation report")
 		}
 		// go-sev-guest prefers report FMS over Options.Product when FMS != 0.
-		// Clear it so the candidate product actually drives the KDS URL.
-		report.Cpuid1EaxFms = 0
+		// Force the candidate's canonical FMS so the product line drives the
+		// KDS URL and the post-download VCEK productName check is skipped.
+		// Clearing FMS instead trips ParseProductName on Siena VCEKs, which
+		// carry productName "Genoa" without a -Bx stepping suffix.
+		report.Cpuid1EaxFms = abi.MaskedCpuid1EaxFromSevProduct(product)
 
 		opts := sevverify.DefaultOptions()
 		opts.Product = product
 		filled, err := sevverify.GetAttestationFromReport(report, opts)
 		if err != nil {
-			lastErr = fmt.Errorf("%s: %w", line, err)
+			errs = append(errs, fmt.Errorf("%s: %w", line, err))
 			continue
 		}
 		if hasVCEK(filled.CertificateChain) {
 			return filled, line, nil
 		}
-		lastErr = fmt.Errorf("%s: missing VCEK", line)
+		errs = append(errs, fmt.Errorf("%s: missing VCEK", line))
 	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("no AMD SEV product candidates")
+	if len(errs) == 0 {
+		errs = append(errs, fmt.Errorf("no AMD SEV product candidates"))
 	}
-	return nil, "", fmt.Errorf("fetch certificates from AMD KDS: %w", lastErr)
+	return nil, "", fmt.Errorf("fetch certificates from AMD KDS: %w", errors.Join(errs...))
 }
 
 func kdsProductCandidates(att *sevsnp.Attestation) []*sevsnp.SevProduct {
@@ -106,7 +111,7 @@ func kdsProductCandidates(att *sevsnp.Attestation) []*sevsnp.SevProduct {
 
 	if att != nil && att.Report != nil {
 		if fms := att.Report.GetCpuid1EaxFms(); fms != 0 {
-			add(abi.SevProductFromCpuid1Eax(fms))
+			add(sevProductFromFms(fms))
 		}
 	}
 	if att != nil {
@@ -122,6 +127,22 @@ func kdsProductCandidates(att *sevsnp.Attestation) []*sevsnp.SevProduct {
 		}
 	}
 	return out
+}
+
+// sevProductFromFms maps report CPUID FMS to a SevProduct for KDS lookups.
+// Siena (family 19h, model A0h) is remapped to Genoa because AMD serves
+// Siena VCEKs under the Genoa product path and shares Genoa ARK/ASK.
+func sevProductFromFms(fms uint32) *sevsnp.SevProduct {
+	family, model, stepping := abi.FmsFromCpuid1Eax(fms)
+	if family == 0x19 && model == 0xa0 {
+		p, err := kds.ParseProductLine("Genoa")
+		if err != nil {
+			return nil
+		}
+		p.MachineStepping = wrapperspb.UInt32(uint32(stepping))
+		return p
+	}
+	return abi.SevProductFromCpuid1Eax(fms)
 }
 
 func AttachCertificateChain(att *sevsnp.Attestation) error {
