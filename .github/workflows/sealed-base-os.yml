@@ -1,0 +1,82 @@
+name: sealed-base-os (exploratory)
+
+# Downloads upstream Kata SNP boot files, runs sev-snp-measure, uploads the
+# resulting bundle as a workflow artifact. This is Phase-2 shape exploration —
+# not yet a NexQloud-owned base OS with an image-signature policy in the initrd.
+
+on:
+  workflow_dispatch:
+    inputs:
+      kata_version:
+        description: Kata Containers release tag (static tarball)
+        required: true
+        default: "4.0.0"
+      vcpu_type:
+        description: sev-snp-measure --vcpu-type (must match launch shape)
+        required: true
+        default: "EPYC-Genoa"
+      vcpus:
+        description: Number of vCPUs to measure for
+        required: true
+        default: "1"
+  push:
+    branches: [stage, main]
+    paths:
+      - "scripts/build-sealed-base-os.sh"
+      - ".github/workflows/sealed-base-os.yml"
+  pull_request:
+    branches: [stage, main]
+    paths:
+      - "scripts/build-sealed-base-os.sh"
+      - ".github/workflows/sealed-base-os.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd curl python3-pip python3-venv
+
+      - name: Build sealed-base-os bundle
+        env:
+          KATA_VERSION: ${{ github.event.inputs.kata_version || '4.0.0' }}
+          VCPU_TYPE: ${{ github.event.inputs.vcpu_type || 'EPYC-Genoa' }}
+          VCPUS: ${{ github.event.inputs.vcpus || '1' }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/build-sealed-base-os.sh
+          ./scripts/build-sealed-base-os.sh
+
+      - name: Show measurement summary
+        run: |
+          set -euo pipefail
+          echo "---- MANIFEST ----"
+          cat out/sealed-base-os/MANIFEST.txt
+          echo "---- expected-measurement.txt ----"
+          cat out/sealed-base-os/expected-measurement.txt
+          echo "---- source.json ----"
+          cat out/sealed-base-os/source.json
+
+      - name: Pack artifact
+        run: |
+          set -euo pipefail
+          tar -C out -czf "sealed-base-os-${{ github.sha }}.tgz" sealed-base-os
+          ls -lh "sealed-base-os-${{ github.sha }}.tgz"
+
+      - name: Upload sealed-base-os artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sealed-base-os-${{ github.sha }}
+          path: sealed-base-os-${{ github.sha }}.tgz
+          if-no-files-found: error
+          retention-days: 30
