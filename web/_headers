@@ -1,0 +1,15 @@
+/*
+  Access-Control-Allow-Origin: *
+  Access-Control-Allow-Methods: GET, HEAD, OPTIONS
+  Access-Control-Allow-Headers: *
+
+/main.wasm
+  Content-Type: application/wasm
+  Access-Control-Allow-Origin: *
+
+/wasm_exec.js
+  Content-Type: text/javascript
+  Access-Control-Allow-Origin: *
+
+/wasm_build.txt
+  Access-Control-Allow-Origin: *

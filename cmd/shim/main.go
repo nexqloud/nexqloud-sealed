@@ -23,11 +23,15 @@ import (
 const defaultAddr = ":8080"
 
 type server struct {
-	inference inference.Backend
-	receipt   *receipt.Builder
-	jwksURL   string
-	tenantID  string
-	ready     atomic.Bool
+	inference   inference.Backend
+	receipt     *receipt.Builder
+	jwksURL     string
+	tenantID    string
+	ledgerURL   string
+	endpointKey string
+	verifyMode  string
+	httpClient  *http.Client
+	ready       atomic.Bool
 }
 
 func main() {
@@ -42,8 +46,15 @@ func main() {
 	}
 
 	srv := &server{
-		jwksURL:  strings.TrimSpace(*jwksURL),
-		tenantID: strings.TrimSpace(*tenantID),
+		jwksURL:     strings.TrimSpace(*jwksURL),
+		tenantID:    strings.TrimSpace(*tenantID),
+		ledgerURL:   strings.TrimSpace(os.Getenv("NEXQLOUD_LEDGER_URL")),
+		endpointKey: strings.TrimSpace(os.Getenv("NEXQLOUD_ENDPOINT_KEY")),
+		verifyMode:  strings.TrimSpace(os.Getenv("NEXQLOUD_VERIFY_MODE")),
+		httpClient:  &http.Client{Timeout: 5 * time.Second},
+	}
+	if srv.verifyMode == "" {
+		srv.verifyMode = "per-response"
 	}
 
 	mux := http.NewServeMux()
@@ -99,7 +110,7 @@ func main() {
 	}
 
 	srv.ready.Store(true)
-	log.Printf("sealed-shim ready (inference=%T, dev=%v)", srv.inference, devmode.Enabled())
+	log.Printf("sealed-shim ready (inference=%T, dev=%v, ledger=%v, mode=%s)", srv.inference, devmode.Enabled(), srv.ledgerURL != "", srv.verifyMode)
 	select {}
 }
 
@@ -187,12 +198,53 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		"sealed_receipt": sealedReceipt,
 	}
 
+	s.publishReceipt(sealedReceipt)
+
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(resp); err != nil {
 		log.Printf("encode response: %v", err)
 	}
+}
+
+func (s *server) publishReceipt(sealedReceipt any) {
+	if s.ledgerURL == "" || s.verifyMode != "per-response" {
+		return
+	}
+	endpointKey := s.endpointKey
+	if endpointKey == "" {
+		log.Printf("ledger: skip publish (NEXQLOUD_ENDPOINT_KEY empty)")
+		return
+	}
+	go func() {
+		body, err := json.Marshal(map[string]any{
+			"endpointKey": endpointKey,
+			"receipt":     sealedReceipt,
+		})
+		if err != nil {
+			log.Printf("ledger: marshal failed: %v", err)
+			return
+		}
+		req, err := http.NewRequest(http.MethodPost, s.ledgerURL, strings.NewReader(string(body)))
+		if err != nil {
+			log.Printf("ledger: build request failed: %v", err)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			log.Printf("ledger: publish failed: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		if resp.StatusCode >= 300 {
+			log.Printf("ledger: publish status %d", resp.StatusCode)
+			return
+		}
+		log.Printf("ledger: published receipt for endpoint %s", endpointKey)
+	}()
 }
 
 func (s *server) verifyIdentity(r *http.Request) (string, error) {
