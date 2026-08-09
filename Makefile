@@ -8,8 +8,17 @@ DEMO_BINS := registry mock-idp bootstrap
 
 all: wasm wasm_exec
 
+# Workers Static Assets reject individual files over 25 MiB.
+WASM_LDFLAGS := -s -w
+WASM_MAX_BYTES := 26214400
+
 wasm:
-	GOOS=js GOARCH=wasm go build -o web/main.wasm ./web
+	GOOS=js GOARCH=wasm go build -ldflags="$(WASM_LDFLAGS)" -trimpath -o web/main.wasm ./web
+	@bytes=$$(wc -c < web/main.wasm); \
+	if [ "$$bytes" -gt $(WASM_MAX_BYTES) ]; then \
+		echo "web/main.wasm is $$bytes bytes (limit $(WASM_MAX_BYTES) / 25 MiB)"; \
+		exit 1; \
+	fi
 	@date -u +%Y%m%d%H%M%S > web/wasm_build.txt
 
 wasm_exec:
