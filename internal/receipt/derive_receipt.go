@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"time"
 
 	"github.com/google/go-sev-guest/proto/sevsnp"
@@ -57,25 +56,19 @@ func (b *Builder) DerivationReceipt(opID string, attJSON []byte, tenantID string
 
 	certChain := EncodeCertificateChain(att.CertificateChain)
 
-	runtimeClaimsJSON, err := AzureRuntimeClaims(b.pub, nonce)
-	if err != nil {
-		panic(err)
-	}
-
 	storedAtt, err := NormalizeAttestationJSON(attJSON)
 	if err != nil {
 		panic(err)
 	}
 
 	return map[string]any{
-		"package":             pkg,
-		"signature":           sigHex,
-		"pubkey":              hex.EncodeToString(b.pub),
-		"attestation":         storedAtt,
-		"cert_chain":          certChain,
-		"runtime_claims_json": json.RawMessage(runtimeClaimsJSON),
-		"nonce":               hex.EncodeToString(nonce),
-		"log_index":           <-logIndexCh,
+		"package":     pkg,
+		"signature":   sigHex,
+		"pubkey":      hex.EncodeToString(b.pub),
+		"attestation": storedAtt,
+		"cert_chain":  certChain,
+		"nonce":       hex.EncodeToString(nonce),
+		"log_index":   <-logIndexCh,
 	}
 }
 

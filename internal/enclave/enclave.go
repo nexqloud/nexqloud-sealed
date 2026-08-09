@@ -37,11 +37,10 @@ func requestHardwareReport(pub ed25519.PublicKey, nonce []byte) (*sevsnp.Attesta
 	copy(reportData[:], hash[:])
 
 	qp, err := client.GetQuoteProvider()
-	if err == nil {
-		return client.GetQuoteProto(qp, reportData)
+	if err != nil {
+		return nil, err
 	}
-
-	return azureRequestReport(reportData)
+	return client.GetQuoteProto(qp, reportData)
 }
 
 func KeyHash(pub ed25519.PublicKey, nonce []byte) [64]byte {

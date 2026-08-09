@@ -34,13 +34,12 @@ type CertificateChain struct {
 }
 
 type SealedReceipt struct {
-	Package           Package           `json:"package"`
-	Signature         string            `json:"signature"`
-	Pubkey            string            `json:"pubkey"`
-	Attestation       json.RawMessage   `json:"attestation"`
-	CertChain         CertificateChain  `json:"cert_chain"`
-	RuntimeClaimsJSON json.RawMessage   `json:"runtime_claims_json"`
-	LogIndex          string            `json:"log_index"`
+	Package     Package          `json:"package"`
+	Signature   string           `json:"signature"`
+	Pubkey      string           `json:"pubkey"`
+	Attestation json.RawMessage  `json:"attestation"`
+	CertChain   CertificateChain `json:"cert_chain"`
+	LogIndex    string           `json:"log_index"`
 }
 
 func EncodeCertificateChain(chain *sevsnp.CertificateChain) CertificateChain {

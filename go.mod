@@ -7,7 +7,6 @@ require (
 	github.com/go-openapi/swag/conv v0.26.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-sev-guest v0.15.0
-	github.com/google/go-tpm v0.9.8
 	github.com/google/uuid v1.6.0
 	github.com/gowebpki/jcs v1.0.1
 	github.com/sigstore/rekor v1.5.2

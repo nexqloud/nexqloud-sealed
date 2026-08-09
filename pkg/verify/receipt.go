@@ -46,14 +46,13 @@ type ReceiptResult struct {
 }
 
 type ReceiptFile struct {
-	Package           map[string]any           `json:"package"`
-	Signature         string                   `json:"signature"`
-	Pubkey            string                   `json:"pubkey"`
-	Attestation       json.RawMessage          `json:"attestation"`
-	CertChain         receipt.CertificateChain `json:"cert_chain"`
-	RuntimeClaimsJSON json.RawMessage          `json:"runtime_claims_json"`
-	Nonce             string                   `json:"nonce"`
-	LogIndex          string                   `json:"log_index"`
+	Package     map[string]any           `json:"package"`
+	Signature   string                   `json:"signature"`
+	Pubkey      string                   `json:"pubkey"`
+	Attestation json.RawMessage          `json:"attestation"`
+	CertChain   receipt.CertificateChain `json:"cert_chain"`
+	Nonce       string                   `json:"nonce"`
+	LogIndex    string                   `json:"log_index"`
 }
 
 func VerifyReceiptJSON(receiptJSON []byte, challengeHex string, rootsCatalog map[string]HardwareRoots) ReceiptResult {
@@ -120,7 +119,7 @@ func verifyInferenceReceipt(wrapper ReceiptFile, challengeHex string, rootsCatal
 	result.Checks = append(result.Checks,
 		checkSignature(wrapper, publicKey),
 		checkHardware(att, wrapper.CertChain, roots),
-		checkKeyBinding(att, wrapper.CertChain, publicKey, nonce, wrapper.RuntimeClaimsJSON),
+		checkKeyBinding(att, wrapper.CertChain, publicKey, nonce),
 		checkCodeLegit(wrapper.Package),
 		checkModelLegit(wrapper.Package),
 		checkGPUWiped(wrapper.Package),
@@ -183,7 +182,7 @@ func verifyDerivationReceipt(wrapper ReceiptFile, challengeHex string, rootsCata
 	result.Checks = append(result.Checks,
 		checkSignature(wrapper, publicKey),
 		checkHardware(att, wrapper.CertChain, roots),
-		checkKeyBinding(att, wrapper.CertChain, publicKey, nonce, wrapper.RuntimeClaimsJSON),
+		checkKeyBinding(att, wrapper.CertChain, publicKey, nonce),
 		checkDerivationAttestationHash(wrapper.Package, wrapper.Attestation),
 		checkDerivationOperatorID(wrapper.Package),
 		checkDerivationKeyVersion(wrapper.Package),
@@ -369,7 +368,7 @@ func checkHardware(att *sevsnp.Attestation, chain receipt.CertificateChain, root
 	return check
 }
 
-func checkKeyBinding(att *sevsnp.Attestation, chain receipt.CertificateChain, pub ed25519.PublicKey, nonce []byte, azureClaimsJSON []byte) Check {
+func checkKeyBinding(att *sevsnp.Attestation, chain receipt.CertificateChain, pub ed25519.PublicKey, nonce []byte) Check {
 	check := Check{
 		ID:    "key_binding",
 		Label: "Key Bound to Silicon",
@@ -379,7 +378,7 @@ func checkKeyBinding(att *sevsnp.Attestation, chain receipt.CertificateChain, pu
 	check.Hash = truncateHex(hex.EncodeToString(expectedHash[:]))
 
 	rc := iv.AttestationReceipt{Attestation: att, CertChain: chain}
-	result := iv.VerifyKeyBinding(rc, pub, iv.Pins{Nonce: nonce}, azureClaimsJSON)
+	result := iv.VerifyKeyBinding(rc, pub, iv.Pins{Nonce: nonce})
 	if result.OK {
 		check.OK = true
 		check.Detail = "REPORT_DATA match"

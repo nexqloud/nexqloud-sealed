@@ -92,8 +92,8 @@ const RECEIPT_TOPICS = [
     checkId: 'key_binding',
     swatchClass: 'key_binding',
     label: 'Key Bound to Silicon',
-    description: 'Links pubkey + nonce into hardware attestation reportData or Azure user-data.',
-    fieldHint: 'Look for "reportData", root "nonce", and "runtime_claims_json".',
+    description: 'Links pubkey + nonce into hardware attestation reportData.',
+    fieldHint: 'Look for "reportData" and root "nonce".',
     plainEnglish: 'Confirms the signing key was bound into the hardware attestation for this destruction.',
   },
   {
@@ -190,7 +190,7 @@ function topicForReceiptPath(path) {
     const key = path.split('.').pop();
     if (REPORT_HIGHLIGHT_KEYS.includes(key)) return key === 'reportData' ? 'key_binding' : 'hardware';
   }
-  if (path === 'nonce' || path.startsWith('runtime_claims_json')) return 'key_binding';
+  if (path === 'nonce') return 'key_binding';
   if (path === 'package.attestation_hash') return 'attestation_hash';
   if (path === 'package.zeroization_evidence' || path.startsWith('package.zeroization_evidence.')) return 'zeroization';
   if (path === 'package.salt_epoch') return 'salt_epoch';

@@ -136,8 +136,8 @@ const RECEIPT_TOPICS = [
     checkId: 'key_binding',
     swatchClass: 'key_binding',
     label: 'Key Bound to Silicon',
-    description: 'Links pubkey + nonce into hardware attestation (reportData or Azure user-data).',
-    fieldHint: 'Look for "reportData" and "runtime_claims_json.user-data".',
+    description: 'Links pubkey + nonce into hardware attestation reportData.',
+    fieldHint: 'Look for "reportData" inside attestation.report.',
     plainEnglish: 'This checks that the signing key really lived inside that specific CPU enclave. The hardware attestation must include a fingerprint of the public key combined with the session nonce.',
   },
   {
@@ -200,7 +200,7 @@ const RECEIPT_TOPICS = [
 
 const TRUNCATE_LEN = 52;
 const REPORT_HIGHLIGHT_KEYS = ['chipId', 'reportData', 'measurement', 'signature'];
-const ROOT_KEY_ORDER = ['package', 'signature', 'pubkey', 'attestation', 'cert_chain', 'runtime_claims_json', 'nonce', 'log_index'];
+const ROOT_KEY_ORDER = ['package', 'signature', 'pubkey', 'attestation', 'cert_chain', 'nonce', 'log_index'];
 const DEFAULT_COLLAPSED = ['attestation.report.__other__'];
 
 let wasmReady = false;
@@ -413,7 +413,6 @@ function topicForPath(path, receipt = lastReceipt) {
   if (path === 'package.enclave_measurement') return 'code_legit';
   if (path === 'package.model_commitment') return 'model_legit';
   if (path === 'package.gpu_policy_hash' || path.startsWith('package.zeroization_cert')) return 'gpu_wiped';
-  if (path.startsWith('runtime_claims_json')) return 'key_binding';
   if (path === 'log_index') return 'ledger';
   if (
     path === 'package.schema' ||

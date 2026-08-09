@@ -54,11 +54,6 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		return nil, err
 	}
 
-	runtimeClaimsJSON, err := AzureRuntimeClaims(b.pub, nonce)
-	if err != nil {
-		return nil, err
-	}
-
 	att, err := enclave.RequestReport(b.pub, nonce)
 	if err != nil {
 		return nil, fmt.Errorf("attestation: %w", err)
@@ -136,13 +131,12 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 	}
 
 	return &SealedReceipt{
-		Package:           pkg,
-		Signature:         sigHex,
-		Pubkey:            hex.EncodeToString(b.pub),
-		Attestation:       attestationJSON,
-		CertChain:         certChain,
-		RuntimeClaimsJSON: json.RawMessage(runtimeClaimsJSON),
-		LogIndex:          <-logIndexCh,
+		Package:     pkg,
+		Signature:   sigHex,
+		Pubkey:      hex.EncodeToString(b.pub),
+		Attestation: attestationJSON,
+		CertChain:   certChain,
+		LogIndex:    <-logIndexCh,
 	}, nil
 }
 

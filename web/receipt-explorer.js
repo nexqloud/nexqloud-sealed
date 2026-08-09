@@ -13,7 +13,7 @@
     const options = {
       truncateLen: 52,
       reportHighlightKeys: ['chipId', 'reportData', 'measurement', 'signature'],
-      rootKeyOrder: ['package', 'signature', 'pubkey', 'attestation', 'cert_chain', 'runtime_claims_json', 'nonce', 'log_index'],
+      rootKeyOrder: ['package', 'signature', 'pubkey', 'attestation', 'cert_chain', 'nonce', 'log_index'],
       defaultCollapsed: ['attestation.report.__other__'],
       escapeHtml: defaultEscapeHtml,
       ...userOptions,

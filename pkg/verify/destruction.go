@@ -211,7 +211,7 @@ func verifyDestructionReceipt(rcpt destruction.Receipt, challengeHex string, roo
 	if err != nil || len(nonce) != 32 {
 		checks = append(checks, Check{ID: "key_binding", Label: "Key Bound to Silicon", Detail: "invalid nonce"})
 	} else {
-		checks = append(checks, checkKeyBinding(att, rcpt.CertChain, publicKey, nonce, rcpt.RuntimeClaimsJSON))
+		checks = append(checks, checkKeyBinding(att, rcpt.CertChain, publicKey, nonce))
 	}
 
 	checks = append(checks, checkDestructionAttestationHash(rcpt.Package, rcpt.Attestation))
