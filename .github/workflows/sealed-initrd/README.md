@@ -37,8 +37,8 @@ On GitHub Environments **staging** and **production** (or repo-level Actions sec
 
 Optional Actions variable:
 
-- `R2_PUBLIC_BASE_URL` — public HTTP base (r2.dev or custom domain).  
-  Default: `https://285ada7dda5a9110cc820302071df4f1.r2.cloudflarestorage.com/nexqloud-sealed-ai`
+- `R2_PUBLIC_BASE_URL` — public HTTP base. Default in workflow:
+  `https://pub-84b99924d959400aa97608c84bbd8000.r2.dev`
 
 ## Local build
 
@@ -47,13 +47,28 @@ chmod +x .github/workflows/sealed-initrd/*.sh
 GIT_SHA=$(git rev-parse HEAD) .github/workflows/sealed-initrd/build.sh
 ```
 
-## Nanoserver (from R2)
+## Browser CORS
+
+R2 public URLs do not send `Access-Control-Allow-Origin` by default. Apply once:
 
 ```bash
-# staging example
-curl -fLO https://<public-base>/staging/sealed-initrd/latest/sealed-initrd-bundle.tgz
-curl -fLO https://<public-base>/staging/sealed-initrd/latest/expected-measurement.txt
-tar -xzf sealed-initrd-bundle.tgz
+aws s3api put-bucket-cors \
+  --bucket nexqloud-sealed-ai \
+  --endpoint-url https://285ada7dda5a9110cc820302071df4f1.r2.cloudflarestorage.com \
+  --cors-configuration file://.github/workflows/sealed-initrd/r2-cors.json
+```
+
+(Or paste the same JSON under R2 bucket → Settings → CORS.)
+
+The public verifier also exposes a same-origin proxy at `/api/initrd-release?env=staging`
+when Pages Functions are enabled (`web/functions/`).
+
+
+```bash
+curl -fLO https://pub-84b99924d959400aa97608c84bbd8000.r2.dev/staging/sealed-initrd/latest/sealed-initrd-bundle.tgz
+curl -fLO https://pub-84b99924d959400aa97608c84bbd8000.r2.dev/staging/sealed-initrd/latest/expected-measurement.txt
+mkdir -p ~/sealed-initrd && cd ~/sealed-initrd
+tar -xzf ~/sealed-initrd-bundle.tgz
+cat expected-measurement.txt
 ./run-vm.sh
-# SEALED_MEASUREMENT must match expected-measurement.txt
 ```

@@ -16,7 +16,7 @@ R2_ACCOUNT_ID="${R2_ACCOUNT_ID:-285ada7dda5a9110cc820302071df4f1}"
 R2_BUCKET="${R2_BUCKET:-nexqloud-sealed-ai}"
 R2_ENDPOINT="${R2_ENDPOINT:-https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com}"
 if [[ -z "${R2_PUBLIC_BASE_URL:-}" ]]; then
-  R2_PUBLIC_BASE_URL="${R2_ENDPOINT}/${R2_BUCKET}"
+  R2_PUBLIC_BASE_URL="https://pub-84b99924d959400aa97608c84bbd8000.r2.dev"
 fi
 
 : "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID / R2 access key required}"

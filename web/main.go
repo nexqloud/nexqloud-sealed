@@ -35,8 +35,21 @@ func verifyReceipt(_ js.Value, args []js.Value) any {
 	if len(args) > 1 {
 		challengeHex = args[1].String()
 	}
+	var measurements []string
+	if len(args) > 2 && args[2].Truthy() {
+		raw := args[2].String()
+		if raw != "" {
+			if err := json.Unmarshal([]byte(raw), &measurements); err != nil {
+				return errorResult("parse measurements JSON: " + err.Error())
+			}
+		}
+	}
 
-	result := verify.VerifyReceiptJSON([]byte(receiptJSON), challengeHex, hardwareRootsCatalog)
+	result := verify.VerifyReceiptJSONOpts([]byte(receiptJSON), verify.VerifyOpts{
+		ChallengeHex: challengeHex,
+		RootsCatalog: hardwareRootsCatalog,
+		Measurements: measurements,
+	})
 	out, err := json.Marshal(result)
 	if err != nil {
 		return errorResult(err.Error())

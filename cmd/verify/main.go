@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/google/go-sev-guest/proto/sevsnp"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -19,6 +20,9 @@ func main() {
 	arkPath := flag.String("ark", "", "path to AMD ARK root certificate (DER)")
 	productLine := flag.String("product", "", "AMD product line for custom roots (e.g. Milan, Genoa)")
 	noColor := flag.Bool("no-color", false, "disable ANSI colors")
+	r2Base := flag.String("r2-base", pkgverify.DefaultR2PublicBase, "public R2 base URL for sealed-initrd releases")
+	initrdEnv := flag.String("initrd-env", "staging,production", "comma-separated R2 envs to load measurements from")
+	noFetchMeas := flag.Bool("no-fetch-measurements", false, "skip fetching published measurements from R2")
 	flag.Parse()
 
 	args := flag.Args()
@@ -65,7 +69,22 @@ func main() {
 		catalog = pkgverify.ApplyCustomHardwareRoots(catalog, product, ask, ark)
 	}
 
-	result := pkgverify.VerifyReceiptJSON(data, *challenge, catalog)
+	var published []string
+	if !*noFetchMeas {
+		envs := splitCSV(*initrdEnv)
+		published, err = pkgverify.FetchPublishedMeasurements(*r2Base, envs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: fetch published measurements: %v (using embedded catalog only)\n", err)
+		} else if len(published) > 0 {
+			fmt.Fprintf(os.Stderr, "loaded %d published measurement(s) from R2\n", len(published))
+		}
+	}
+
+	result := pkgverify.VerifyReceiptJSONOpts(data, pkgverify.VerifyOpts{
+		ChallengeHex: *challenge,
+		RootsCatalog: catalog,
+		Measurements: published,
+	})
 	if result.Error != "" {
 		fmt.Fprintf(os.Stderr, "%s\n", result.Error)
 		os.Exit(1)
@@ -75,6 +94,18 @@ func main() {
 	if !result.OverallOK {
 		os.Exit(1)
 	}
+}
+
+func splitCSV(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func inferProductLine(receiptJSON []byte) (string, error) {

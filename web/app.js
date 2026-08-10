@@ -147,7 +147,7 @@ const RECEIPT_TOPICS = [
     label: 'Code Legit',
     description: 'Enclave measurement compared to verifier allowlist.',
     fieldHint: 'Look for "enclave_measurement" inside package.',
-    plainEnglish: 'Confirms the guest launch measurement (AMD SNP MEASUREMENT from the attestation report) matches a known-good build published by CI. Package enclave_measurement must agree with the report when both are present.',
+    plainEnglish: 'Confirms the guest launch measurement (AMD SNP MEASUREMENT from the attestation report) matches a known-good build published by CI to public R2 (sealed-initrd/latest/release.json). Package enclave_measurement must agree with the report when both are present.',
   },
   {
     id: 'model_legit',
@@ -996,11 +996,42 @@ function hideStatus() {
   document.getElementById('status').hidden = true;
 }
 
+async function loadPublishedMeasurements() {
+  const envs = ['staging', 'production'];
+  const out = [];
+  for (const env of envs) {
+    const urls = [
+      `/api/initrd-release?env=${encodeURIComponent(env)}`,
+      `https://pub-84b99924d959400aa97608c84bbd8000.r2.dev/${env}/sealed-initrd/latest/release.json`,
+    ];
+    for (const url of urls) {
+      try {
+        const resp = await fetch(url, { cache: 'no-store' });
+        if (!resp.ok) continue;
+        const rel = await resp.json();
+        if (rel && typeof rel.measurement === 'string' && rel.measurement.length === 96) {
+          out.push(rel.measurement.toLowerCase());
+          break;
+        }
+      } catch {
+        // try next URL
+      }
+    }
+  }
+  return out;
+}
+
 async function runWasmVerify(receiptJSON) {
   if (!wasmReady) throw new Error('Wasm module not loaded');
 
   const challenge = document.getElementById('challenge-input').value.trim();
-  const resultJSON = globalThis.verifyReceipt(receiptJSON, challenge);
+  setStatus('Fetching published launch measurements from R2…');
+  const measurements = await loadPublishedMeasurements();
+  const resultJSON = globalThis.verifyReceipt(
+    receiptJSON,
+    challenge,
+    JSON.stringify(measurements),
+  );
   const result = JSON.parse(resultJSON);
 
   if (result.error) throw new Error(result.error);

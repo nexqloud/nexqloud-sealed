@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/go-sev-guest/proto/sevsnp"
 	"github.com/gowebpki/jcs"
@@ -25,9 +26,8 @@ const (
 	KataImageMeasurementEPYCv4 = "1af6826c5e0574dcbc8f940f5028f590104eba26b8627e90df0243dde111268c2c63dc0b1cfaa027115f7a13b4d316da"
 )
 
-// MeasurementCatalog is the set of launch measurements the verifier accepts for
-// Code Legit. Option A CI appends new values from expected-measurement.txt here
-// after a nanoserver boot confirms the match.
+// MeasurementCatalog is the embedded fallback allowlist for Code Legit.
+// Prefer published CI values from R2 (…/sealed-initrd/latest/release.json).
 var MeasurementCatalog = []string{
 	KataImageMeasurementEPYCv4,
 	KnownEnclaveMeasurement,
@@ -67,11 +67,27 @@ type ReceiptFile struct {
 }
 
 func VerifyReceiptJSON(receiptJSON []byte, challengeHex string, rootsCatalog map[string]HardwareRoots) ReceiptResult {
+	return VerifyReceiptJSONOpts(receiptJSON, VerifyOpts{
+		ChallengeHex: challengeHex,
+		RootsCatalog: rootsCatalog,
+	})
+}
+
+// VerifyOpts configures receipt verification. When Measurements is non-empty,
+// Code Legit uses those values (merged with the embedded catalog). Callers
+// should load published CI measurements from R2 release.json.
+type VerifyOpts struct {
+	ChallengeHex string
+	RootsCatalog map[string]HardwareRoots
+	Measurements []string
+}
+
+func VerifyReceiptJSONOpts(receiptJSON []byte, opts VerifyOpts) ReceiptResult {
 	var wrapper ReceiptFile
 	if err := json.Unmarshal(receiptJSON, &wrapper); err != nil {
 		return ReceiptResult{Error: fmt.Sprintf("parse receipt: %v", err)}
 	}
-	return VerifyReceipt(wrapper, challengeHex, rootsCatalog)
+	return VerifyReceiptOpts(wrapper, opts)
 }
 
 func packageSchema(pkg map[string]any) string {
@@ -83,13 +99,20 @@ func packageSchema(pkg map[string]any) string {
 }
 
 func VerifyReceipt(wrapper ReceiptFile, challengeHex string, rootsCatalog map[string]HardwareRoots) ReceiptResult {
-	if packageSchema(wrapper.Package) == receipt.DerivationSchema {
-		return verifyDerivationReceipt(wrapper, challengeHex, rootsCatalog)
-	}
-	return verifyInferenceReceipt(wrapper, challengeHex, rootsCatalog)
+	return VerifyReceiptOpts(wrapper, VerifyOpts{
+		ChallengeHex: challengeHex,
+		RootsCatalog: rootsCatalog,
+	})
 }
 
-func verifyInferenceReceipt(wrapper ReceiptFile, challengeHex string, rootsCatalog map[string]HardwareRoots) ReceiptResult {
+func VerifyReceiptOpts(wrapper ReceiptFile, opts VerifyOpts) ReceiptResult {
+	if packageSchema(wrapper.Package) == receipt.DerivationSchema {
+		return verifyDerivationReceipt(wrapper, opts.ChallengeHex, opts.RootsCatalog)
+	}
+	return verifyInferenceReceipt(wrapper, opts)
+}
+
+func verifyInferenceReceipt(wrapper ReceiptFile, opts VerifyOpts) ReceiptResult {
 	result := ReceiptResult{
 		LogIndex: wrapper.LogIndex,
 	}
@@ -125,16 +148,17 @@ func verifyInferenceReceipt(wrapper ReceiptFile, challengeHex string, rootsCatal
 		}
 	}
 
-	roots := pickHardwareRoots(att, rootsCatalog)
+	roots := pickHardwareRoots(att, opts.RootsCatalog)
+	measurements := EffectiveMeasurements(opts.Measurements)
 
 	result.Checks = append(result.Checks,
 		checkSignature(wrapper, publicKey),
 		checkHardware(att, wrapper.CertChain, roots),
 		checkKeyBinding(att, wrapper.CertChain, publicKey, nonce),
-		checkCodeLegit(wrapper.Package, att),
+		checkCodeLegit(wrapper.Package, att, measurements),
 		checkModelLegit(wrapper.Package),
 		checkGPUWiped(wrapper.Package),
-		checkFreshness(nonceHex, challengeHex),
+		checkFreshness(nonceHex, opts.ChallengeHex),
 	)
 
 	result.OverallOK = true
@@ -406,13 +430,14 @@ func enclaveKeyHash(pub ed25519.PublicKey, nonce []byte) [64]byte {
 	return sha512.Sum512(append(append([]byte{}, pub...), nonce...))
 }
 
-func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation) Check {
+func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, catalog []string) Check {
 	check := Check{
 		ID:    "code_legit",
 		Label: "Code Legit",
 	}
 
 	pkgMeas, _ := pkg["enclave_measurement"].(string)
+	pkgMeas = strings.ToLower(strings.TrimSpace(pkgMeas))
 	reportMeas := ""
 	if att != nil && att.Report != nil && len(att.Report.Measurement) > 0 {
 		reportMeas = hex.EncodeToString(att.Report.Measurement)
@@ -434,19 +459,22 @@ func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation) Check {
 	}
 	check.Hash = truncateHex(candidate)
 
-	for _, known := range MeasurementCatalog {
-		if candidate == known {
+	if len(catalog) == 0 {
+		catalog = MeasurementCatalog
+	}
+	for _, known := range catalog {
+		if candidate == strings.ToLower(strings.TrimSpace(known)) {
 			check.OK = true
 			src := "attestation"
 			if reportMeas == "" {
 				src = "package"
 			}
-			check.Detail = src + " measurement in catalog: " + truncateHex(candidate)
+			check.Detail = src + " measurement in published catalog: " + truncateHex(candidate)
 			return check
 		}
 	}
 
-	check.Detail = "launch measurement not in catalog"
+	check.Detail = "launch measurement not in published catalog"
 	return check
 }
 
