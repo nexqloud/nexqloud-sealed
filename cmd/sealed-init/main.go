@@ -1,17 +1,23 @@
-// PID 1 for the sealed boot initrd: mount essentials, print launch
-// MEASUREMENT, then exec /sealed-shim from the same initrd.
+// PID 1 for the sealed boot initrd: mount essentials, apply fw_cfg env,
+// bring up the NIC, print launch MEASUREMENT, then exec /sealed-shim.
 package main
 
 import (
+	"bufio"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/google/go-sev-guest/client"
+	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
+
+const fwcfgEnvPath = "/sys/firmware/qemu_fw_cfg/by_name/opt/nexqloud/env/raw"
 
 func main() {
 	_ = os.MkdirAll("/dev", 0755)
@@ -32,6 +38,19 @@ func main() {
 		log("SEALED_MEASURE_FAIL " + err.Error())
 	}
 
+	if err := loadFwcfgEnv(fwcfgEnvPath); err != nil {
+		log("SEALED_FWCFG " + err.Error())
+	} else {
+		log("SEALED_FWCFG_OK loaded " + fwcfgEnvPath)
+	}
+
+	if err := setupNetworkFromEnv(); err != nil {
+		log("SEALED_NET_FAIL " + err.Error())
+	}
+	if err := setupResolvConfFromEnv(); err != nil {
+		log("SEALED_DNS_FAIL " + err.Error())
+	}
+
 	shim := "/sealed-shim"
 	if _, err := os.Stat(shim); err != nil {
 		log("SEALED_NO_SHIM " + err.Error() + " — idling")
@@ -40,16 +59,142 @@ func main() {
 		}
 	}
 
-	if os.Getenv("NEXQLOUD_DEV") == "" {
-		_ = os.Setenv("NEXQLOUD_DEV", "1")
+	args := []string{shim, "--addr", ":8080"}
+	if os.Getenv("NEXQLOUD_DEV") == "1" {
+		args = append(args, "--dev")
 	}
 
-	log("SEALED_EXEC " + shim)
-	err := syscall.Exec(shim, []string{shim, "--dev", "--addr", ":8080"}, os.Environ())
+	log("SEALED_EXEC " + strings.Join(args, " "))
+	err := syscall.Exec(shim, args, os.Environ())
 	log("SEALED_EXEC_FAIL " + err.Error())
 	for {
 		time.Sleep(time.Hour)
 	}
+}
+
+func loadFwcfgEnv(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	n := 0
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		val = strings.TrimSpace(val)
+		if key == "" {
+			continue
+		}
+		if err := os.Setenv(key, val); err != nil {
+			return err
+		}
+		n++
+	}
+	if err := sc.Err(); err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("no KEY=VALUE lines in fw_cfg env")
+	}
+	log(fmt.Sprintf("SEALED_FWCFG_KEYS %d", n))
+	return nil
+}
+
+func setupNetworkFromEnv() error {
+	cidr := strings.TrimSpace(os.Getenv("NEXQLOUD_NET_IP"))
+	if cidr == "" {
+		log("SEALED_NET_SKIP NEXQLOUD_NET_IP unset")
+		return nil
+	}
+	iface := strings.TrimSpace(os.Getenv("NEXQLOUD_NET_IFACE"))
+	if iface == "" {
+		iface = "eth0"
+	}
+	gw := strings.TrimSpace(os.Getenv("NEXQLOUD_NET_GW"))
+
+	link, err := waitLink(iface, 15*time.Second)
+	if err != nil {
+		return err
+	}
+	addr, err := netlink.ParseAddr(cidr)
+	if err != nil {
+		return fmt.Errorf("parse NEXQLOUD_NET_IP %q: %w", cidr, err)
+	}
+	if err := netlink.AddrReplace(link, addr); err != nil {
+		return fmt.Errorf("AddrReplace: %w", err)
+	}
+	if err := netlink.LinkSetUp(link); err != nil {
+		return fmt.Errorf("LinkSetUp: %w", err)
+	}
+	if gw != "" {
+		gwIP := net.ParseIP(gw)
+		if gwIP == nil {
+			return fmt.Errorf("parse NEXQLOUD_NET_GW %q", gw)
+		}
+		route := &netlink.Route{
+			LinkIndex: link.Attrs().Index,
+			Gw:        gwIP,
+		}
+		if err := netlink.RouteReplace(route); err != nil {
+			return fmt.Errorf("RouteReplace: %w", err)
+		}
+	}
+	log(fmt.Sprintf("SEALED_NET_OK %s %s gw=%s", iface, cidr, gw))
+	return nil
+}
+
+func setupResolvConfFromEnv() error {
+	dns := strings.TrimSpace(os.Getenv("NEXQLOUD_NET_DNS"))
+	if dns == "" {
+		log("SEALED_DNS_SKIP NEXQLOUD_NET_DNS unset")
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString("# written by sealed-init from fw_cfg\n")
+	for _, ns := range strings.Fields(strings.ReplaceAll(dns, ",", " ")) {
+		ns = strings.TrimSpace(ns)
+		if ns == "" {
+			continue
+		}
+		b.WriteString("nameserver ")
+		b.WriteString(ns)
+		b.WriteByte('\n')
+	}
+	if b.Len() == 0 {
+		return fmt.Errorf("NEXQLOUD_NET_DNS empty after parse")
+	}
+	if err := os.WriteFile("/etc/resolv.conf", []byte(b.String()), 0644); err != nil {
+		return err
+	}
+	log("SEALED_DNS_OK " + dns)
+	return nil
+}
+
+func waitLink(name string, timeout time.Duration) (netlink.Link, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		link, err := netlink.LinkByName(name)
+		if err == nil {
+			return link, nil
+		}
+		lastErr = err
+		time.Sleep(100 * time.Millisecond)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("timeout")
+	}
+	return nil, fmt.Errorf("wait for %s: %w", name, lastErr)
 }
 
 func ensureSevGuest() {
