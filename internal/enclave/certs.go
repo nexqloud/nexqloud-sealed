@@ -6,12 +6,15 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
+	"time"
 
 	"github.com/google/go-sev-guest/abi"
 	"github.com/google/go-sev-guest/kds"
 	"github.com/google/go-sev-guest/proto/sevsnp"
 	sevverify "github.com/google/go-sev-guest/verify"
+	"github.com/google/go-sev-guest/verify/trust"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -75,12 +78,22 @@ func fetchCertificatesFromKDS(att *sevsnp.Attestation) (*sevsnp.Attestation, str
 
 		opts := sevverify.DefaultOptions()
 		opts.Product = product
+		// DefaultHTTPSGetter retries for 2m per URL; wrong product lines 404
+		// and would block warmup for minutes. Keep retries short for probes.
+		opts.Getter = &trust.RetryHTTPSGetter{
+			Timeout:       20 * time.Second,
+			MaxRetryDelay: 2 * time.Second,
+			Getter:        &trust.SimpleHTTPSGetter{},
+		}
+		log.Printf("KDS: fetching certificate chain for product line %s", line)
 		filled, err := sevverify.GetAttestationFromReport(report, opts)
 		if err != nil {
+			log.Printf("KDS: %s failed: %v", line, err)
 			errs = append(errs, fmt.Errorf("%s: %w", line, err))
 			continue
 		}
 		if hasVCEK(filled.CertificateChain) {
+			log.Printf("KDS: %s ok", line)
 			return filled, line, nil
 		}
 		errs = append(errs, fmt.Errorf("%s: missing VCEK", line))
@@ -119,14 +132,26 @@ func kdsProductCandidates(att *sevsnp.Attestation) []*sevsnp.SevProduct {
 	}
 	add(abi.SevProduct())
 
-	// Kata guests often expose an unmapped FMS/CPUID even on real EPYC hosts.
-	// Probe the known KDS product lines; the matching VCEK URL succeeds.
-	for _, line := range []string{"Milan", "Genoa", "Turin"} {
+	// Prefer Genoa first: Siena hosts are served under Genoa KDS paths, and
+	// Kata guests often expose an unmapped FMS. Wrong lines 404; order matters.
+	for _, line := range []string{"Genoa", "Turin", "Milan"} {
 		if p, err := kds.ParseProductLine(line); err == nil {
 			add(p)
 		}
 	}
-	return out
+	return preferProductLine(out, "Genoa")
+}
+
+func preferProductLine(in []*sevsnp.SevProduct, line string) []*sevsnp.SevProduct {
+	var first, rest []*sevsnp.SevProduct
+	for _, p := range in {
+		if kds.ProductLine(p) == line {
+			first = append(first, p)
+		} else {
+			rest = append(rest, p)
+		}
+	}
+	return append(first, rest...)
 }
 
 // sevProductFromFms maps report CPUID FMS to a SevProduct for KDS lookups.
