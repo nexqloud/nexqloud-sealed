@@ -37,10 +37,12 @@ type jwksCache struct {
 
 func newJWKSCache(url string) *jwksCache {
 	return &jwksCache{
-		url:    url,
-		client: http.DefaultClient,
-		keys:   make(map[string]crypto.PublicKey),
-		ttl:    5 * time.Minute,
+		url: url,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+		keys: make(map[string]crypto.PublicKey),
+		ttl:  5 * time.Minute,
 	}
 }
 
@@ -70,7 +72,14 @@ func (c *jwksCache) key(kid string) (crypto.PublicKey, error) {
 }
 
 func (c *jwksCache) refresh() error {
-	resp, err := c.client.Get(c.url)
+	req, err := http.NewRequest(http.MethodGet, c.url, nil)
+	if err != nil {
+		return fmt.Errorf("build jwks request: %w", err)
+	}
+	// ngrok free interstitial otherwise returns HTML to non-browser clients.
+	req.Header.Set("ngrok-skip-browser-warning", "true")
+	req.Header.Set("User-Agent", "nexqloud-sealed-shim/1")
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("fetch jwks: %w", err)
 	}

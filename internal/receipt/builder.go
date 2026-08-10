@@ -115,10 +115,7 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 	sig := ed25519.Sign(b.priv, canonicalPkg)
 	sigHex := hex.EncodeToString(sig)
 
-	logIndexCh := make(chan string, 1)
-	go func() {
-		logIndexCh <- tlog.AppendToLog(canonicalPkg, sigHex, b.priv)
-	}()
+	tlog.AppendToLogAsync(canonicalPkg, sigHex, b.priv)
 
 	attestationJSON, err := MarshalAttestation(att)
 	if err != nil {
@@ -136,7 +133,7 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		Pubkey:      hex.EncodeToString(b.pub),
 		Attestation: attestationJSON,
 		CertChain:   certChain,
-		LogIndex:    <-logIndexCh,
+		LogIndex:    "",
 	}, nil
 }
 
