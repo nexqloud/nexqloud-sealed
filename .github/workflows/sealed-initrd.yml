@@ -81,7 +81,16 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq zstd cpio gzip python3-venv ca-certificates awscli
+          sudo apt-get install -y -qq zstd cpio gzip python3-venv ca-certificates curl unzip
+
+      - name: Install AWS CLI (R2 S3 API)
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install --update
+          aws --version
 
       - name: Build measured initrd bundle
         env:
