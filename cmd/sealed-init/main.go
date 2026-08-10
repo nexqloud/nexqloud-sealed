@@ -49,6 +49,8 @@ func main() {
 	if err := setupResolvConfFromEnv(); err != nil {
 		log("SEALED_DNS_FAIL " + err.Error())
 	}
+	disableIPv6()
+	_ = os.Setenv("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt")
 
 	shim := "/sealed-shim"
 	if _, err := os.Stat(shim); err != nil {
@@ -169,7 +171,8 @@ func setupResolvConfFromEnv() error {
 		return nil
 	}
 	var b strings.Builder
-	b.WriteString("# written by sealed-init from fw_cfg\n")
+	b.WriteString("# written by sealed-init\n")
+	b.WriteString("options timeout:2 attempts:2\n")
 	for _, ns := range strings.Fields(strings.ReplaceAll(dns, ",", " ")) {
 		ns = strings.TrimSpace(ns)
 		if ns == "" {
@@ -187,6 +190,19 @@ func setupResolvConfFromEnv() error {
 	}
 	log("SEALED_DNS_OK " + dns)
 	return nil
+}
+
+func disableIPv6() {
+	for _, p := range []string{
+		"/proc/sys/net/ipv6/conf/all/disable_ipv6",
+		"/proc/sys/net/ipv6/conf/default/disable_ipv6",
+	} {
+		if err := os.WriteFile(p, []byte("1\n"), 0644); err != nil {
+			log("SEALED_IPV6_DISABLE " + p + " " + err.Error())
+			return
+		}
+	}
+	log("SEALED_IPV6_DISABLED")
 }
 
 func waitLink(name string, timeout time.Duration) (netlink.Link, error) {

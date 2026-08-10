@@ -27,7 +27,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
   -o "${STAGE}/init" ./cmd/sealed-init
 chmod +x "${STAGE}/init"
 
-echo "==> embedding CA certificates"
+echo "==> embedding CA certificates + minimal /etc"
 if [[ -d /etc/ssl/certs ]]; then
   cp -a /etc/ssl/certs/. "${STAGE}/etc/ssl/certs/" || true
 fi
@@ -36,6 +36,8 @@ if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
 elif [[ -f /etc/ssl/cert.pem ]]; then
   cp -f /etc/ssl/cert.pem "${STAGE}/etc/ssl/certs/ca-certificates.crt"
 fi
+printf '%s\n' 'hosts: files dns' > "${STAGE}/etc/nsswitch.conf"
+printf '%s\n' '127.0.0.1 localhost' '::1 localhost' > "${STAGE}/etc/hosts"
 
 echo "==> packing sealed-initrd.img"
 (

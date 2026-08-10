@@ -55,6 +55,7 @@ fi
 
 if [[ -n "${TAP_IF}" ]]; then
   echo "SEALED_HOST_TAP ${TAP_IF}" >&2
+  echo "SEALED_HOST_HINT: need ip_forward + FORWARD ACCEPT + MASQUERADE for guest KDS egress" >&2
   args+=(
     -netdev "tap,id=net0,ifname=${TAP_IF},script=no,downscript=no"
     -device virtio-net-pci,netdev=net0
