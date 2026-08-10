@@ -1103,16 +1103,50 @@ async function proofFromKeys(env, gitSha, payloadKey, bundleKey) {
   };
 }
 
+async function loadModelsAllowlist(env) {
+  const resp = await fetchFirstOK([
+    `/api/models-allowlist?env=${encodeURIComponent(env)}`,
+    `/sealed-models/${encodeURIComponent(env)}/allowlist.json`,
+    `${R2_PUBLIC_BASE}/${env}/sealed-models/allowlist.json`,
+  ]);
+  if (!resp) return null;
+  return resp.json();
+}
+
+async function loadModelCommitments() {
+  const envs = ['staging', 'production'];
+  const seen = new Set();
+  const out = [];
+  for (const env of envs) {
+    let allowlist;
+    try {
+      allowlist = await loadModelsAllowlist(env);
+    } catch {
+      allowlist = null;
+    }
+    for (const e of allowlist?.entries || []) {
+      const c = (e.commitment || '').trim();
+      if (!c || seen.has(c)) continue;
+      seen.add(c);
+      out.push(c);
+    }
+  }
+  return out;
+}
+
 async function runWasmVerify(receiptJSON) {
   if (!wasmReady) throw new Error('Wasm module not loaded');
 
   const challenge = document.getElementById('challenge-input').value.trim();
-  setStatus('Fetching Sigstore proof for launch measurement…');
+  setStatus('Fetching Sigstore proof and model allowlist…');
   const measurement = extractReceiptMeasurement(receiptJSON);
-  const proof = measurement ? await loadMeasurementProof(measurement) : null;
+  const [proof, models] = await Promise.all([
+    measurement ? loadMeasurementProof(measurement) : Promise.resolve(null),
+    loadModelCommitments(),
+  ]);
   const opts = proof
-    ? { proofs: [proof] }
-    : { measurements: [] };
+    ? { proofs: [proof], models }
+    : { measurements: [], models };
   const resultJSON = globalThis.verifyReceipt(
     receiptJSON,
     challenge,

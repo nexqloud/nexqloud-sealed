@@ -30,7 +30,7 @@ func main() {
 // verifyReceipt(receiptJSON, challengeHex?, optsJSON?)
 // optsJSON may be:
 //   - legacy: JSON array of measurement hex strings
-//   - object: {"measurements":[...],"proofs":[{"payload":"...","bundle":{...},...}]}
+//   - object: {"measurements":[...],"proofs":[...],"models":["sha256:..."]}
 func verifyReceipt(_ js.Value, args []js.Value) any {
 	if len(args) < 1 {
 		return errorResult("expected receipt JSON string")
@@ -80,12 +80,14 @@ func applyVerifyOptsJSON(opts *verify.VerifyOpts, raw string) error {
 	var wire struct {
 		Measurements []string                  `json:"measurements"`
 		Proofs       []verify.MeasurementProof `json:"proofs"`
+		Models       []string                  `json:"models"`
 	}
 	if err := json.Unmarshal([]byte(raw), &wire); err != nil {
 		return fmt.Errorf("parse verify opts JSON: %w", err)
 	}
 	opts.Measurements = wire.Measurements
 	opts.MeasurementProofs = wire.Proofs
+	opts.Models = wire.Models
 	return nil
 }
 

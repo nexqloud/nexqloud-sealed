@@ -96,6 +96,13 @@ func main() {
 			opts.Measurements = hexes
 			fmt.Fprintf(os.Stderr, "loaded %d allowlist measurement(s) from R2\n", len(hexes))
 		}
+
+		if models, err := pkgverify.FetchAllowlistModelCommitments(*r2Base, envs); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: fetch model allowlist: %v (using embedded catalog only)\n", err)
+		} else if len(models) > 0 {
+			opts.Models = models
+			fmt.Fprintf(os.Stderr, "loaded %d model commitment(s) from R2\n", len(models))
+		}
 	}
 
 	result := pkgverify.VerifyReceiptJSONOpts(data, opts)

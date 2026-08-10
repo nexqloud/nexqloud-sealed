@@ -38,12 +38,12 @@ var ModelCatalog = map[string]string{
 }
 
 type Check struct {
-	ID              string `json:"id"`
-	Label           string `json:"label"`
-	OK              bool   `json:"ok"`
-	Detail          string `json:"detail"`
-	Hash            string `json:"hash,omitempty"`
-	ChainValidated  bool   `json:"chain_validated,omitempty"`
+	ID             string `json:"id"`
+	Label          string `json:"label"`
+	OK             bool   `json:"ok"`
+	Detail         string `json:"detail"`
+	Hash           string `json:"hash,omitempty"`
+	ChainValidated bool   `json:"chain_validated,omitempty"`
 }
 
 type ReceiptResult struct {
@@ -79,11 +79,16 @@ func VerifyReceiptJSON(receiptJSON []byte, challengeHex string, rootsCatalog map
 // measurement must match a proof whose cosign/Sigstore bundle verifies under
 // the sealed-initrd workflow identity. Otherwise Measurements (merged with the
 // embedded catalog) is used as a hex allowlist fallback.
+//
+// Model Legit: Models is a list of allowed model_commitment values (typically
+// from the sealed-models R2/Pages allowlist), merged with the embedded
+// ModelCatalog (mock entry for unit tests).
 type VerifyOpts struct {
 	ChallengeHex      string
 	RootsCatalog      map[string]HardwareRoots
 	Measurements      []string
 	MeasurementProofs []MeasurementProof
+	Models            []string
 }
 
 func VerifyReceiptJSONOpts(receiptJSON []byte, opts VerifyOpts) ReceiptResult {
@@ -159,7 +164,7 @@ func verifyInferenceReceipt(wrapper ReceiptFile, opts VerifyOpts) ReceiptResult 
 		checkHardware(att, wrapper.CertChain, roots),
 		checkKeyBinding(att, wrapper.CertChain, publicKey, nonce),
 		checkCodeLegit(wrapper.Package, att, opts),
-		checkModelLegit(wrapper.Package),
+		checkModelLegit(wrapper.Package, opts),
 		checkGPUWiped(wrapper.Package),
 		checkFreshness(nonceHex, opts.ChallengeHex),
 	)
@@ -506,7 +511,7 @@ func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, opts VerifyOpts
 	return check
 }
 
-func checkModelLegit(pkg map[string]any) Check {
+func checkModelLegit(pkg map[string]any, opts VerifyOpts) Check {
 	check := Check{
 		ID:    "model_legit",
 		Label: "Model Legit",
@@ -515,7 +520,7 @@ func checkModelLegit(pkg map[string]any) Check {
 	commitment, _ := pkg["model_commitment"].(string)
 	check.Hash = truncateHex(stringsTrimPrefix(commitment, "sha256:"))
 
-	for _, catalogHash := range ModelCatalog {
+	for _, catalogHash := range EffectiveModelCommitments(opts.Models) {
 		if commitment == catalogHash {
 			check.OK = true
 			check.Detail = commitment

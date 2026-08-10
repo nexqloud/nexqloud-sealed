@@ -1,0 +1,16 @@
+{
+  "schema": "nexqloud-sealed-models-allowlist/1",
+  "environment": "production",
+  "entries": [
+    {
+      "id": "qwen-0.5b",
+      "commitment": "sha256:74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+      "hf_repo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+      "revision": "9217f5db79a29953eb74d5343926648285ec7e67",
+      "file": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      "quant": "Q4_K_M",
+      "expected_model_commitment": "production/sealed-models/qwen-0.5b/expected-model-commitment.txt",
+      "model_meta": "production/sealed-models/qwen-0.5b/model-meta.json"
+    }
+  ]
+}
