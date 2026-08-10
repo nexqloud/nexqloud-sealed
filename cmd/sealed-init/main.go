@@ -17,7 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const fwcfgEnvPath = "/sys/firmware/qemu_fw_cfg/by_name/opt/nexqloud/env/raw"
+const fwcfgEnvPath = "/sys/firmware/qemu_fw_cfg/by_name/" + fwCfgEnvName + "/raw"
 
 func main() {
 	_ = os.MkdirAll("/dev", 0755)
@@ -38,10 +38,8 @@ func main() {
 		log("SEALED_MEASURE_FAIL " + err.Error())
 	}
 
-	if err := loadFwcfgEnv(fwcfgEnvPath); err != nil {
+	if err := loadFwcfgEnv(); err != nil {
 		log("SEALED_FWCFG " + err.Error())
-	} else {
-		log("SEALED_FWCFG_OK loaded " + fwcfgEnvPath)
 	}
 
 	if err := setupNetworkFromEnv(); err != nil {
@@ -72,15 +70,13 @@ func main() {
 	}
 }
 
-func loadFwcfgEnv(path string) error {
-	f, err := os.Open(path)
+func loadFwcfgEnv() error {
+	raw, src, err := readFwcfgEnvBytes()
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
 	n := 0
+	sc := bufio.NewScanner(strings.NewReader(string(raw)))
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -104,10 +100,21 @@ func loadFwcfgEnv(path string) error {
 		return err
 	}
 	if n == 0 {
-		return fmt.Errorf("no KEY=VALUE lines in fw_cfg env")
+		return fmt.Errorf("no KEY=VALUE lines in fw_cfg env (%s)", src)
 	}
-	log(fmt.Sprintf("SEALED_FWCFG_KEYS %d", n))
+	log(fmt.Sprintf("SEALED_FWCFG_OK %s keys=%d", src, n))
 	return nil
+}
+
+func readFwcfgEnvBytes() ([]byte, string, error) {
+	if raw, err := os.ReadFile(fwcfgEnvPath); err == nil {
+		return raw, "sysfs", nil
+	}
+	raw, err := readFwcfgFileIO(fwCfgEnvName)
+	if err != nil {
+		return nil, "", err
+	}
+	return raw, "ioport", nil
 }
 
 func setupNetworkFromEnv() error {

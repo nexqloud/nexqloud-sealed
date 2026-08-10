@@ -23,6 +23,11 @@ for f in AMDSEV.fd vmlinuz sealed-initrd.img; do
   [[ -f "${DIR}/${f}" ]] || { echo "missing ${DIR}/${f}" >&2; exit 1; }
 done
 
+if [[ -n "${TAP_IF}" && -z "${ENV_FILE}" ]]; then
+  echo "TAP_IF=${TAP_IF} requires ENV_FILE=./env.txt (guest IP via fw_cfg)" >&2
+  exit 1
+fi
+
 args=(
   -machine q35,accel=kvm,kernel_irqchip=split,confidential-guest-support=snp
   -cpu "${VCPU_TYPE}",pmu=off
@@ -40,10 +45,13 @@ args=(
 
 if [[ -n "${ENV_FILE}" ]]; then
   [[ -f "${ENV_FILE}" ]] || { echo "missing ENV_FILE=${ENV_FILE}" >&2; exit 1; }
+  ENV_FILE="$(cd "$(dirname "${ENV_FILE}")" && pwd)/$(basename "${ENV_FILE}")"
+  echo "SEALED_HOST_FWCFG opt/nexqloud/env <- ${ENV_FILE}" >&2
   args+=(-fw_cfg "name=opt/nexqloud/env,file=${ENV_FILE}")
 fi
 
 if [[ -n "${TAP_IF}" ]]; then
+  echo "SEALED_HOST_TAP ${TAP_IF}" >&2
   args+=(
     -netdev "tap,id=net0,ifname=${TAP_IF},script=no,downscript=no"
     -device virtio-net-pci,netdev=net0
