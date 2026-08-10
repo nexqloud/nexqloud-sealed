@@ -38,8 +38,13 @@ func TestCheckModelLegitUsesOpts(t *testing.T) {
 	if !ok.OK {
 		t.Fatalf("expected OK, got %#v", ok)
 	}
-	fail := checkModelLegit(pkg, VerifyOpts{})
-	if fail.OK {
-		t.Fatal("expected fail without allowlist")
+	// Embedded ModelCatalog also includes the published qwen commitment.
+	embedded := checkModelLegit(pkg, VerifyOpts{})
+	if !embedded.OK {
+		t.Fatalf("expected OK via embedded catalog, got %#v", embedded)
+	}
+	unknown := checkModelLegit(map[string]any{"model_commitment": "sha256:deadbeef"}, VerifyOpts{})
+	if unknown.OK {
+		t.Fatal("expected fail for unknown commitment")
 	}
 }

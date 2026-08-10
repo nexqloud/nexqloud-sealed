@@ -1105,8 +1105,8 @@ async function proofFromKeys(env, gitSha, payloadKey, bundleKey) {
 
 async function loadModelsAllowlist(env) {
   const resp = await fetchFirstOK([
-    `/api/models-allowlist?env=${encodeURIComponent(env)}`,
     `/sealed-models/${encodeURIComponent(env)}/allowlist.json`,
+    `/api/models-allowlist?env=${encodeURIComponent(env)}`,
     `${R2_PUBLIC_BASE}/${env}/sealed-models/allowlist.json`,
   ]);
   if (!resp) return null;

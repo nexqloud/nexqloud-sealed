@@ -33,8 +33,12 @@ var MeasurementCatalog = []string{
 	KnownEnclaveMeasurement,
 }
 
+// ModelCatalog is the embedded fallback allowlist for Model Legit when no
+// sealed-models allowlist commitments are supplied via VerifyOpts.Models.
 var ModelCatalog = map[string]string{
 	"mock-model": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+	// Qwen2.5-0.5B-Instruct-GGUF @ 9217f5db… / qwen2.5-0.5b-instruct-q4_k_m.gguf
+	"qwen-0.5b": "sha256:74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
 }
 
 type Check struct {
