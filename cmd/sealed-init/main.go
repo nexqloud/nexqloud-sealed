@@ -1,5 +1,6 @@
-// PID 1 for the sealed boot initrd: mount essentials, apply fw_cfg env,
-// bring up the NIC, print launch MEASUREMENT, then exec /sealed-shim.
+// PID 1 for the sealed boot initrd: mount essentials, apply host env
+// (virtio-blk / optional fw_cfg), bring up the NIC, print launch
+// MEASUREMENT, then exec /sealed-shim.
 package main
 
 import (
@@ -17,7 +18,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const fwcfgEnvPath = "/sys/firmware/qemu_fw_cfg/by_name/" + fwCfgEnvName + "/raw"
+const fwcfgEnvPath = "/sys/firmware/qemu_fw_cfg/by_name/opt/nexqloud/env/raw"
 
 func main() {
 	_ = os.MkdirAll("/dev", 0755)
@@ -38,8 +39,8 @@ func main() {
 		log("SEALED_MEASURE_FAIL " + err.Error())
 	}
 
-	if err := loadFwcfgEnv(); err != nil {
-		log("SEALED_FWCFG " + err.Error())
+	if err := loadGuestEnv(); err != nil {
+		log("SEALED_ENV " + err.Error())
 	}
 
 	if err := setupNetworkFromEnv(); err != nil {
@@ -70,8 +71,8 @@ func main() {
 	}
 }
 
-func loadFwcfgEnv() error {
-	raw, src, err := readFwcfgEnvBytes()
+func loadGuestEnv() error {
+	raw, src, err := readGuestEnvBytes()
 	if err != nil {
 		return err
 	}
@@ -100,21 +101,22 @@ func loadFwcfgEnv() error {
 		return err
 	}
 	if n == 0 {
-		return fmt.Errorf("no KEY=VALUE lines in fw_cfg env (%s)", src)
+		return fmt.Errorf("no KEY=VALUE lines in guest env (%s)", src)
 	}
-	log(fmt.Sprintf("SEALED_FWCFG_OK %s keys=%d", src, n))
+	log(fmt.Sprintf("SEALED_ENV_OK %s keys=%d", src, n))
 	return nil
 }
 
-func readFwcfgEnvBytes() ([]byte, string, error) {
+func readGuestEnvBytes() ([]byte, string, error) {
+	if raw, err := readEnvFromVirtioBlk(); err == nil {
+		return raw, "virtio-blk:" + envDiskSerial, nil
+	} else {
+		log("SEALED_ENV_DISK " + err.Error())
+	}
 	if raw, err := os.ReadFile(fwcfgEnvPath); err == nil {
-		return raw, "sysfs", nil
+		return raw, "fw_cfg-sysfs", nil
 	}
-	raw, err := readFwcfgFileIO(fwCfgEnvName)
-	if err != nil {
-		return nil, "", err
-	}
-	return raw, "ioport", nil
+	return nil, "", fmt.Errorf("no guest env (need virtio-blk serial=%s)", envDiskSerial)
 }
 
 func setupNetworkFromEnv() error {

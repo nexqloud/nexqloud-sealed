@@ -6,7 +6,7 @@
 #
 # Network PoC (Kata QEMU has no -netdev user):
 #   TAP_IF=tap-sealed0 ENV_FILE=./env.txt ./run-vm.sh
-# env.txt must include NEXQLOUD_NET_IP / NEXQLOUD_NET_GW (and shim env).
+# env.txt is attached as a readonly virtio-blk (serial=nexqloud-env).
 # Do NOT put IP config on the kernel cmdline — that changes the measurement.
 set -euo pipefail
 
@@ -24,7 +24,7 @@ for f in AMDSEV.fd vmlinuz sealed-initrd.img; do
 done
 
 if [[ -n "${TAP_IF}" && -z "${ENV_FILE}" ]]; then
-  echo "TAP_IF=${TAP_IF} requires ENV_FILE=./env.txt (guest IP via fw_cfg)" >&2
+  echo "TAP_IF=${TAP_IF} requires ENV_FILE=./env.txt (guest IP via virtio-blk)" >&2
   exit 1
 fi
 
@@ -46,8 +46,11 @@ args=(
 if [[ -n "${ENV_FILE}" ]]; then
   [[ -f "${ENV_FILE}" ]] || { echo "missing ENV_FILE=${ENV_FILE}" >&2; exit 1; }
   ENV_FILE="$(cd "$(dirname "${ENV_FILE}")" && pwd)/$(basename "${ENV_FILE}")"
-  echo "SEALED_HOST_FWCFG opt/nexqloud/env <- ${ENV_FILE}" >&2
-  args+=(-fw_cfg "name=opt/nexqloud/env,file=${ENV_FILE}")
+  echo "SEALED_HOST_ENVDISK serial=nexqloud-env <- ${ENV_FILE}" >&2
+  args+=(
+    -drive "file=${ENV_FILE},if=none,format=raw,readonly=on,id=nqenv"
+    -device "virtio-blk-pci,drive=nqenv,serial=nexqloud-env"
+  )
 fi
 
 if [[ -n "${TAP_IF}" ]]; then
