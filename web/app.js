@@ -163,8 +163,8 @@ const RECEIPT_TOPICS = [
     checkId: 'gpu_wiped',
     swatchClass: 'gpu_wiped',
     label: 'GPU Wiped',
-    description: 'GPU isolation policy hash and zeroization certificate.',
-    fieldHint: 'Look for "gpu_policy_hash" and "zeroization_cert" inside package.',
+    description: 'Signed two-pass VRAM wipe certificate from an allowlisted wipe worker.',
+    fieldHint: 'Look for "gpu_policy_hash" and "zeroization_cert" (method, pubkey, worker_commitment) inside package.',
     plainEnglish: 'Checks that GPU memory was wiped and isolation rules were enforced before inference. We compare the policy hash and wipe certificate against expected values.',
   },
   {
@@ -1146,20 +1146,104 @@ async function loadModelCommitments() {
   return out;
 }
 
+async function loadJSONAllowlist(urls) {
+  const resp = await fetchFirstOK(urls);
+  if (!resp) return null;
+  return resp.json();
+}
+
+async function loadGPUWipeVerifyOpts() {
+  const envs = ['staging', 'production'];
+  const policyHashes = [];
+  const wipeIssuers = [];
+  const wipeWorkers = [];
+  const seenP = new Set();
+  const seenI = new Set();
+  const seenW = new Set();
+  const tried = [];
+
+  for (const env of envs) {
+    const policyURLs = [
+      `/sealed-gpu-policies/${encodeURIComponent(env)}/allowlist.json`,
+      `/api/gpu-policies-allowlist?env=${encodeURIComponent(env)}`,
+      `${R2_PUBLIC_BASE}/${env}/sealed-gpu-policies/allowlist.json`,
+    ];
+    const issuerURLs = [
+      `/sealed-wipe-issuers/${encodeURIComponent(env)}/allowlist.json`,
+      `/api/wipe-issuers-allowlist?env=${encodeURIComponent(env)}`,
+      `${R2_PUBLIC_BASE}/${env}/sealed-wipe-issuers/allowlist.json`,
+    ];
+    const workerURLs = [
+      `/sealed-wipe-workers/${encodeURIComponent(env)}/allowlist.json`,
+      `/api/wipe-workers-allowlist?env=${encodeURIComponent(env)}`,
+      `${R2_PUBLIC_BASE}/${env}/sealed-wipe-workers/allowlist.json`,
+    ];
+    tried.push(...policyURLs, ...issuerURLs, ...workerURLs);
+
+    let policies;
+    let issuers;
+    let workers;
+    try {
+      policies = await loadJSONAllowlist(policyURLs);
+    } catch {
+      policies = null;
+    }
+    try {
+      issuers = await loadJSONAllowlist(issuerURLs);
+    } catch {
+      issuers = null;
+    }
+    try {
+      workers = await loadJSONAllowlist(workerURLs);
+    } catch {
+      workers = null;
+    }
+    for (const e of policies?.entries || []) {
+      const c = (e.policy_hash || '').trim();
+      if (!c || seenP.has(c)) continue;
+      seenP.add(c);
+      policyHashes.push(c);
+    }
+    for (const e of issuers?.entries || []) {
+      const c = (e.pubkey || '').trim().toLowerCase();
+      if (!c || seenI.has(c)) continue;
+      seenI.add(c);
+      wipeIssuers.push(c);
+    }
+    for (const e of workers?.entries || []) {
+      const c = (e.commitment || '').trim();
+      if (!c || seenW.has(c)) continue;
+      seenW.add(c);
+      wipeWorkers.push(c);
+    }
+  }
+
+  if (policyHashes.length === 0 || wipeIssuers.length === 0 || wipeWorkers.length === 0) {
+    throw new Error(
+      `GPU wipe allowlists incomplete (policies=${policyHashes.length}, issuers=${wipeIssuers.length}, workers=${wipeWorkers.length}). Tried:\n${tried.join('\n')}`,
+    );
+  }
+  return { gpu_policy_hashes: policyHashes, wipe_issuers: wipeIssuers, wipe_workers: wipeWorkers };
+}
+
 async function runWasmVerify(receiptJSON) {
   if (!wasmReady) throw new Error('Wasm module not loaded');
 
   const challenge = document.getElementById('challenge-input').value.trim();
-  setStatus('Fetching Sigstore proof and model allowlist…');
+  setStatus('Fetching Sigstore proof and allowlists…');
   const measurement = extractReceiptMeasurement(receiptJSON);
-  const [proof, models] = await Promise.all([
+  const [proof, models, gpuOpts] = await Promise.all([
     measurement ? loadMeasurementProof(measurement) : Promise.resolve(null),
     loadModelCommitments(),
+    loadGPUWipeVerifyOpts(),
   ]);
   console.info('[sealed-verify] model commitments loaded', models.length, models);
-  const opts = proof
-    ? { proofs: [proof], models }
-    : { measurements: [], models };
+  console.info('[sealed-verify] gpu wipe opts', gpuOpts);
+  const opts = {
+    ...(proof ? { proofs: [proof] } : { measurements: [] }),
+    models,
+    ...gpuOpts,
+  };
   const resultJSON = globalThis.verifyReceipt(
     receiptJSON,
     challenge,

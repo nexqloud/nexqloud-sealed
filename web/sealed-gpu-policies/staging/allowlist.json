@@ -1,0 +1,11 @@
+{
+  "schema": "nexqloud-sealed-gpu-policies-allowlist/1",
+  "environment": "staging",
+  "entries": [
+    {
+      "id": "qwen-0.5b",
+      "model": "qwen-0.5b",
+      "policy_hash": "sha256:404ce44f9a841944db9e2a4b40522f1e22561547918c38ec5bc016676a48b23e"
+    }
+  ]
+}

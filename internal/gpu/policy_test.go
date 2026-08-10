@@ -25,18 +25,27 @@ func TestHashDeterministic(t *testing.T) {
 
 func TestRequestZeroizationMock(t *testing.T) {
 	t.Setenv("NEXQLOUD_DEV", "1")
-	cert, err := RequestZeroization()
+	t.Setenv("NEXQLOUD_WIPE_URL", "")
+	h, err := Hash(DevReferencePolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := RequestZeroization(h, "aabb")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cert["signature"] == nil {
 		t.Fatal("expected mock signature in clearance certificate")
 	}
+	if cert["method"] != MethodDevNoop {
+		t.Fatalf("expected %s, got %v", MethodDevNoop, cert["method"])
+	}
 }
 
-func TestRequestZeroizationRequiresProdIntegration(t *testing.T) {
+func TestRequestZeroizationRequiresWipeURL(t *testing.T) {
 	t.Setenv("NEXQLOUD_DEV", "0")
-	if _, err := RequestZeroization(); err == nil {
-		t.Fatal("expected error without NEXQLOUD_DEV")
+	t.Setenv("NEXQLOUD_WIPE_URL", "")
+	if _, err := RequestZeroization("sha256:00", "aa"); err == nil {
+		t.Fatal("expected error without wipe URL")
 	}
 }

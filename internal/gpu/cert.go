@@ -24,17 +24,18 @@ const (
 // after each inference response. Signature covers the JCS canonical form of
 // the certificate with the signature field removed.
 type ZeroizationCert struct {
-	Schema      string `json:"schema"`
-	ClearanceID string `json:"clearance_id"`
-	GPUID       string `json:"gpu_id"`
-	GPUModel    string `json:"gpu_model,omitempty"`
-	Method      string `json:"method"`
-	PolicyHash  string `json:"policy_hash"`
-	Nonce       string `json:"nonce,omitempty"`
-	WipedAt     string `json:"wiped_at"`
-	Issuer      string `json:"issuer"`
-	Pubkey      string `json:"pubkey"`
-	Signature   string `json:"signature"`
+	Schema           string `json:"schema"`
+	ClearanceID      string `json:"clearance_id"`
+	GPUID            string `json:"gpu_id"`
+	GPUModel         string `json:"gpu_model,omitempty"`
+	Method           string `json:"method"`
+	PolicyHash       string `json:"policy_hash"`
+	Nonce            string `json:"nonce,omitempty"`
+	WorkerCommitment string `json:"worker_commitment,omitempty"`
+	WipedAt          string `json:"wiped_at"`
+	Issuer           string `json:"issuer"`
+	Pubkey           string `json:"pubkey"`
+	Signature        string `json:"signature"`
 }
 
 func signingPayload(cert ZeroizationCert) ([]byte, error) {

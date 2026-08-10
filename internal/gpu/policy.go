@@ -62,16 +62,3 @@ func Hash(p Policy) (string, error) {
 	sum := sha256.Sum256(canonical)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
-
-func RequestZeroization() (map[string]any, error) {
-	if !devmode.Enabled() {
-		return nil, fmt.Errorf("gpu zeroization cert requires production worker integration (set NEXQLOUD_DEV=1 for mock cert)")
-	}
-	return map[string]any{
-		"clearance_id": "mock-clearance-0001",
-		"gpu_id":       "mock-gpu-0",
-		"wiped_at":     "2026-06-24T00:00:00Z",
-		"signature":    "mock-ed25519-signature-deadbeef",
-		"issuer":       "mock-gpu-attestation-service",
-	}, nil
-}

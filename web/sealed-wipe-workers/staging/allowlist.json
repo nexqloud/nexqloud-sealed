@@ -1,0 +1,10 @@
+{
+  "schema": "nexqloud-sealed-wipe-workers-allowlist/1",
+  "environment": "staging",
+  "entries": [
+    {
+      "id": "wipe-worker",
+      "commitment": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  ]
+}

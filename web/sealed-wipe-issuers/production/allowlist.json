@@ -1,0 +1,11 @@
+{
+  "schema": "nexqloud-sealed-wipe-issuers-allowlist/1",
+  "environment": "production",
+  "entries": [
+    {
+      "id": "nexqloud-wipe-worker",
+      "issuer": "nexqloud-wipe-worker",
+      "pubkey": "1cc6d5ce6f2987fd5728bd1c9a783c66e99ff08dc1ff694101b24e8e7d6a09b0"
+    }
+  ]
+}

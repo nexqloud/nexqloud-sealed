@@ -1,0 +1,56 @@
+name: sealed-gpu-wipe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [stage, main]
+    paths:
+      - "web/sealed-gpu-policies/**"
+      - "web/sealed-wipe-issuers/**"
+      - "web/sealed-wipe-workers/**"
+      - "scripts/upload-gpu-wipe-r2.sh"
+      - ".github/workflows/sealed-gpu-wipe.yml"
+
+permissions:
+  contents: read
+
+env:
+  R2_ACCOUNT_ID: "285ada7dda5a9110cc820302071df4f1"
+  R2_BUCKET: "nexqloud-sealed-ai"
+  R2_PUBLIC_BASE_URL: "https://pub-84b99924d959400aa97608c84bbd8000.r2.dev"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ github.ref == 'refs/heads/stage' && 'staging' || 'production' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve deploy environment
+        id: env
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF}" in
+            refs/heads/stage) echo "name=staging" >> "$GITHUB_OUTPUT" ;;
+            refs/heads/main|refs/tags/v*) echo "name=production" >> "$GITHUB_OUTPUT" ;;
+            *) echo "name=staging" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Install AWS CLI (R2 S3 API)
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install --update
+
+      - name: Publish allowlists to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ENV_NAME: ${{ steps.env.outputs.name }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/upload-gpu-wipe-r2.sh
+          ./scripts/upload-gpu-wipe-r2.sh

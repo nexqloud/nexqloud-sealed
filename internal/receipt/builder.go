@@ -83,7 +83,7 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		return nil, err
 	}
 
-	zeroCert, err := gpu.RequestZeroization()
+	zeroCert, err := gpu.RequestZeroization(policyHash, nonceHex)
 	if err != nil {
 		return nil, err
 	}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/go-sev-guest/proto/sevsnp"
 	"github.com/gowebpki/jcs"
@@ -83,12 +84,19 @@ func VerifyReceiptJSON(receiptJSON []byte, challengeHex string, rootsCatalog map
 // Model Legit: Models is a list of allowed model_commitment values (typically
 // from the sealed-models R2/Pages allowlist), merged with the embedded
 // ModelCatalog (mock entry for unit tests).
+//
+// GPU Wiped: GPUPolicyHashes, WipeIssuers (ed25519 pubkey hex), and WipeWorkers
+// (worker binary sha256 commitments) come from published allowlists.
 type VerifyOpts struct {
 	ChallengeHex      string
 	RootsCatalog      map[string]HardwareRoots
 	Measurements      []string
 	MeasurementProofs []MeasurementProof
 	Models            []string
+	GPUPolicyHashes   []string
+	WipeIssuers       []string
+	WipeWorkers       []string
+	AllowDevNoop      bool
 }
 
 func VerifyReceiptJSONOpts(receiptJSON []byte, opts VerifyOpts) ReceiptResult {
@@ -165,7 +173,7 @@ func verifyInferenceReceipt(wrapper ReceiptFile, opts VerifyOpts) ReceiptResult 
 		checkKeyBinding(att, wrapper.CertChain, publicKey, nonce),
 		checkCodeLegit(wrapper.Package, att, opts),
 		checkModelLegit(wrapper.Package, opts),
-		checkGPUWiped(wrapper.Package),
+		checkGPUWiped(wrapper.Package, opts),
 		checkFreshness(nonceHex, opts.ChallengeHex),
 	)
 
@@ -532,51 +540,29 @@ func checkModelLegit(pkg map[string]any, opts VerifyOpts) Check {
 	return check
 }
 
-func referencePolicyHashes() ([]string, error) {
-	candidates := []gpu.Policy{gpu.DevReferencePolicy()}
-	if prod := gpu.DefaultPolicy(); prod.Model != "" {
-		candidates = append(candidates, prod)
-	}
-
-	seen := make(map[string]struct{})
-	var hashes []string
-	for _, p := range candidates {
-		h, err := gpu.Hash(p)
-		if err != nil {
-			return nil, err
-		}
-		if _, ok := seen[h]; ok {
-			continue
-		}
-		seen[h] = struct{}{}
-		hashes = append(hashes, h)
-	}
-	return hashes, nil
-}
-
-func checkGPUWiped(pkg map[string]any) Check {
+func checkGPUWiped(pkg map[string]any, opts VerifyOpts) Check {
 	check := Check{
 		ID:    "gpu_wiped",
 		Label: "GPU Wiped",
 	}
 
 	policyHash, _ := pkg["gpu_policy_hash"].(string)
-	expectedHashes, err := referencePolicyHashes()
-	if err != nil {
-		check.Detail = err.Error()
+	check.Hash = truncateHex(stringsTrimPrefix(policyHash, "sha256:"))
+
+	policyCatalog := EffectiveGPUPolicyHashes(opts.GPUPolicyHashes)
+	if len(policyCatalog) == 0 {
+		check.Detail = "gpu policy allowlist empty"
 		return check
 	}
-
-	check.Hash = truncateHex(stringsTrimPrefix(policyHash, "sha256:"))
 	matched := false
-	for _, expectedHash := range expectedHashes {
+	for _, expectedHash := range policyCatalog {
 		if policyHash == expectedHash {
 			matched = true
 			break
 		}
 	}
 	if !matched {
-		check.Detail = "gpu_policy_hash mismatch"
+		check.Detail = "gpu_policy_hash not in allowlist"
 		return check
 	}
 
@@ -586,15 +572,85 @@ func checkGPUWiped(pkg map[string]any) Check {
 		return check
 	}
 
-	for _, key := range []string{"clearance_id", "gpu_id", "wiped_at", "signature", "issuer"} {
-		if certRaw[key] == nil || certRaw[key] == "" {
-			check.Detail = fmt.Sprintf("zeroization_cert missing %s", key)
+	cert, err := gpu.CertFromMap(certRaw)
+	if err != nil {
+		check.Detail = err.Error()
+		return check
+	}
+	if err := gpu.VerifyCertSignature(cert); err != nil {
+		check.Detail = err.Error()
+		return check
+	}
+	if cert.PolicyHash != policyHash {
+		check.Detail = "zeroization_cert.policy_hash mismatch"
+		return check
+	}
+	nonceHex, _ := pkg["nonce"].(string)
+	if cert.Nonce != "" && nonceHex != "" && cert.Nonce != nonceHex {
+		check.Detail = "zeroization_cert.nonce mismatch"
+		return check
+	}
+	switch cert.Method {
+	case gpu.MethodTwoPass:
+	case gpu.MethodDevNoop:
+		if !opts.AllowDevNoop {
+			check.Detail = "dev-noop wipe method not allowed"
 			return check
 		}
+	default:
+		check.Detail = fmt.Sprintf("unsupported wipe method %q", cert.Method)
+		return check
+	}
+	if err := gpu.ValidateCertTimestamp(cert, time.Now().UTC(), 5*time.Minute); err != nil {
+		check.Detail = err.Error()
+		return check
+	}
+
+	issuers := EffectiveWipeIssuers(opts.WipeIssuers)
+	if len(issuers) == 0 {
+		check.Detail = "wipe issuer allowlist empty"
+		return check
+	}
+	pub := strings.ToLower(strings.TrimSpace(cert.Pubkey))
+	issuerOK := false
+	for _, want := range issuers {
+		if pub == strings.ToLower(strings.TrimSpace(want)) {
+			issuerOK = true
+			break
+		}
+	}
+	if !issuerOK {
+		check.Detail = "wipe issuer pubkey not in allowlist"
+		return check
+	}
+
+	workers := EffectiveWipeWorkers(opts.WipeWorkers)
+	if len(workers) == 0 {
+		check.Detail = "wipe worker allowlist empty"
+		return check
+	}
+	wc := strings.TrimSpace(cert.WorkerCommitment)
+	if wc == "" {
+		check.Detail = "zeroization_cert missing worker_commitment"
+		return check
+	}
+	workerOK := false
+	for _, want := range workers {
+		if wc == strings.TrimSpace(want) {
+			workerOK = true
+			break
+		}
+	}
+	if !workerOK {
+		check.Detail = "worker_commitment not in allowlist"
+		return check
 	}
 
 	check.OK = true
-	check.Detail = "policy enforced"
+	check.Detail = "two-pass wipe cert verified"
+	if cert.Method == gpu.MethodDevNoop {
+		check.Detail = "dev-noop wipe cert verified"
+	}
 	return check
 }
 

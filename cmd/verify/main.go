@@ -103,6 +103,25 @@ func main() {
 			opts.Models = models
 			fmt.Fprintf(os.Stderr, "loaded %d model commitment(s) from R2\n", len(models))
 		}
+
+		if hashes, err := pkgverify.FetchAllowlistGPUPolicyHashes(*r2Base, envs); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: fetch gpu policy allowlist: %v\n", err)
+		} else if len(hashes) > 0 {
+			opts.GPUPolicyHashes = hashes
+			fmt.Fprintf(os.Stderr, "loaded %d gpu policy hash(es) from R2\n", len(hashes))
+		}
+		if issuers, err := pkgverify.FetchAllowlistWipeIssuers(*r2Base, envs); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: fetch wipe issuer allowlist: %v\n", err)
+		} else if len(issuers) > 0 {
+			opts.WipeIssuers = issuers
+			fmt.Fprintf(os.Stderr, "loaded %d wipe issuer(s) from R2\n", len(issuers))
+		}
+		if workers, err := pkgverify.FetchAllowlistWipeWorkers(*r2Base, envs); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: fetch wipe worker allowlist: %v\n", err)
+		} else if len(workers) > 0 {
+			opts.WipeWorkers = workers
+			fmt.Fprintf(os.Stderr, "loaded %d wipe worker commitment(s) from R2\n", len(workers))
+		}
 	}
 
 	result := pkgverify.VerifyReceiptJSONOpts(data, opts)
