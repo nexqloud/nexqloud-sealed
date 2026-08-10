@@ -1,13 +1,14 @@
 name: sealed-initrd
 
 # Build static sealed-shim into a measured initrd, predict the SNP launch
-# measurement, cosign-sign to Rekor (push), upload boot bundle.
+# measurement, cosign-sign to Rekor (push), publish boot bundle to R2.
 #
-# Scripts live next to this workflow: .github/workflows/sealed-initrd/
+# Scripts: .github/workflows/sealed-initrd/
 # Guest PID1: cmd/sealed-init
 #
-# GitHub-hosted runners cannot boot SEV-SNP. On a nanoserver:
-#   unpack artifact → ./run-vm.sh → SEALED_MEASUREMENT == expected-measurement.txt
+# R2 (public bucket nexqloud-sealed-ai), per environment:
+#   staging/sealed-initrd/<sha>/...  + staging/sealed-initrd/latest/...
+#   production/sealed-initrd/<sha>/... + production/sealed-initrd/latest/...
 
 on:
   workflow_dispatch:
@@ -43,14 +44,33 @@ env:
   VCPU_TYPE: "EPYC-v4"
   APPEND: "console=ttyS0 earlyprintk=serial,ttyS0 noreplace-smp"
   OUT: out/sealed-initrd
+  R2_ACCOUNT_ID: "285ada7dda5a9110cc820302071df4f1"
+  R2_BUCKET: "nexqloud-sealed-ai"
 
 jobs:
   build-measure:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    environment: ${{ github.ref == 'refs/heads/stage' && 'staging' || github.event_name == 'pull_request' && 'preview' || 'production' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Resolve deploy environment
+        id: env
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF}" in
+            refs/heads/stage)
+              echo "name=staging" >> "$GITHUB_OUTPUT"
+              ;;
+            refs/heads/main|refs/tags/v*)
+              echo "name=production" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "name=preview" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -61,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq zstd cpio gzip python3-venv ca-certificates
+          sudo apt-get install -y -qq zstd cpio gzip python3-venv ca-certificates awscli
 
       - name: Build measured initrd bundle
         env:
@@ -72,9 +92,11 @@ jobs:
           .github/workflows/sealed-initrd/build.sh
 
       - name: Pack boot bundle
+        id: pack
         run: |
           set -euo pipefail
-          tar -C "${OUT}" -czf "sealed-initrd-bundle-${{ github.sha }}.tgz" \
+          BUNDLE="sealed-initrd-bundle-${{ github.sha }}.tgz"
+          tar -C "${OUT}" -czf "${BUNDLE}" \
             sealed-initrd.img \
             AMDSEV.fd \
             vmlinuz \
@@ -84,17 +106,18 @@ jobs:
             run-vm.sh \
             rootfs/sealed-shim \
             rootfs/init
-          ls -lh "sealed-initrd-bundle-${{ github.sha }}.tgz"
+          ls -lh "${BUNDLE}"
+          echo "bundle=${BUNDLE}" >> "$GITHUB_OUTPUT"
           echo "---- MANIFEST ----"
           cat "${OUT}/MANIFEST.txt"
 
-      - name: Upload artifact
+      - name: Upload GitHub artifact
         uses: actions/upload-artifact@v4
         with:
           name: sealed-initrd-bundle-${{ github.sha }}
           path: sealed-initrd-bundle-${{ github.sha }}.tgz
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
 
       - name: Install cosign
         if: github.event_name != 'pull_request'
@@ -102,6 +125,7 @@ jobs:
 
       - name: Sign measurement blob (keyless → Rekor)
         if: github.event_name != 'pull_request'
+        id: sign
         run: |
           set -euo pipefail
           cosign sign-blob --yes \
@@ -110,7 +134,8 @@ jobs:
           cosign sign-blob --yes \
             --bundle "${OUT}/MANIFEST.sigstore.json" \
             "${OUT}/MANIFEST.txt"
-          tar -C "${OUT}" -czf "sealed-initrd-bundle-${{ github.sha }}.tgz" \
+          BUNDLE="sealed-initrd-bundle-${{ github.sha }}.tgz"
+          tar -C "${OUT}" -czf "${BUNDLE}" \
             sealed-initrd.img \
             AMDSEV.fd \
             vmlinuz \
@@ -122,8 +147,9 @@ jobs:
             run-vm.sh \
             rootfs/sealed-shim \
             rootfs/init
+          echo "bundle=${BUNDLE}" >> "$GITHUB_OUTPUT"
 
-      - name: Re-upload signed bundle
+      - name: Upload signed GitHub artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
@@ -135,4 +161,23 @@ jobs:
             out/sealed-initrd/MANIFEST.txt
             out/sealed-initrd/MANIFEST.sigstore.json
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
+
+      - name: Publish to Cloudflare R2
+        if: github.event_name != 'pull_request' && steps.env.outputs.name != 'preview'
+        env:
+          ENV_NAME: ${{ steps.env.outputs.name }}
+          GIT_SHA: ${{ github.sha }}
+          BUNDLE_TGZ: sealed-initrd-bundle-${{ github.sha }}.tgz
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${AWS_ACCESS_KEY_ID}" || -z "${AWS_SECRET_ACCESS_KEY}" ]]; then
+            echo "Missing R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY for environment '${ENV_NAME}'." >&2
+            echo "Add them under Settings → Environments → ${ENV_NAME} (or repo Actions secrets)." >&2
+            exit 1
+          fi
+          .github/workflows/sealed-initrd/upload-r2.sh
+          cat "${OUT}/r2-publish.txt"
