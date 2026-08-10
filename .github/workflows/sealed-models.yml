@@ -1,0 +1,101 @@
+name: sealed-models
+
+# Hash the pinned HF GGUF and publish sealed-models allowlist to R2
+# (same bucket/secrets as sealed-initrd). No manual upload step.
+#
+# R2 layout:
+#   {staging|production}/sealed-models/allowlist.json
+#   {staging|production}/sealed-models/<id>/expected-model-commitment.txt
+#   {staging|production}/sealed-models/<id>/model-meta.json
+#   {staging|production}/sealed-models/latest/release.json
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [stage, main]
+    paths:
+      - "web/sealed-models/**"
+      - "scripts/hash-hf-gguf.sh"
+      - "scripts/upload-models-r2.sh"
+      - ".github/workflows/sealed-models.yml"
+
+permissions:
+  contents: read
+
+env:
+  R2_ACCOUNT_ID: "285ada7dda5a9110cc820302071df4f1"
+  R2_BUCKET: "nexqloud-sealed-ai"
+  R2_PUBLIC_BASE_URL: "https://pub-84b99924d959400aa97608c84bbd8000.r2.dev"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ github.ref == 'refs/heads/stage' && 'staging' || 'production' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve deploy environment
+        id: env
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF}" in
+            refs/heads/stage)
+              echo "name=staging" >> "$GITHUB_OUTPUT"
+              ;;
+            refs/heads/main|refs/tags/v*)
+              echo "name=production" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "name=staging" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Install AWS CLI (R2 S3 API)
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install --update
+          aws --version
+
+      - name: Hash pinned HF GGUF
+        run: |
+          set -euo pipefail
+          chmod +x scripts/hash-hf-gguf.sh scripts/upload-models-r2.sh
+          MODEL_ID=qwen-0.5b OUT_DIR="$(pwd)/out/sealed-models/qwen-0.5b" \
+            ./scripts/hash-hf-gguf.sh
+          echo "commitment=$(tr -d '\n' < out/sealed-models/qwen-0.5b/expected-model-commitment.txt)"
+
+      - name: Check committed allowlist matches hashed GGUF
+        run: |
+          set -euo pipefail
+          ENV_NAME="${{ steps.env.outputs.name }}"
+          GOT=$(tr -d '\n' < out/sealed-models/qwen-0.5b/expected-model-commitment.txt)
+          WANT=$(tr -d '\n' < "web/sealed-models/${ENV_NAME}/qwen-0.5b/expected-model-commitment.txt")
+          if [[ "${GOT}" != "${WANT}" ]]; then
+            echo "Hashed GGUF commitment differs from committed Pages pin." >&2
+            echo "  hashed:    ${GOT}" >&2
+            echo "  committed: ${WANT}" >&2
+            echo "Update web/sealed-models/${ENV_NAME}/ after changing HF pin in scripts/hash-hf-gguf.sh" >&2
+            exit 1
+          fi
+          echo "OK: commitment matches web/sealed-models/${ENV_NAME}/qwen-0.5b/"
+
+      - name: Publish to R2
+        env:
+          ENV_NAME: ${{ steps.env.outputs.name }}
+          MODEL_DIR: ${{ github.workspace }}/out/sealed-models/qwen-0.5b
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL || 'https://pub-84b99924d959400aa97608c84bbd8000.r2.dev' }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+            echo "Missing R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY for environment '${ENV_NAME}'." >&2
+            exit 1
+          fi
+          ./scripts/upload-models-r2.sh
+          echo "Published ${ENV_NAME}/sealed-models/allowlist.json"
+          cat "${MODEL_DIR}/r2-publish.txt"

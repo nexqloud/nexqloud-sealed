@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Publish sealed-models allowlist + commitment blob to Cloudflare R2.
 #
+# Automated by .github/workflows/sealed-models.yml on push to stage/main
+# (paths: web/sealed-models/**, this script, hash-hf-gguf.sh). Manual use:
+#
+#   ENV_NAME=staging MODEL_DIR=./out/sealed-models/qwen-0.5b ./scripts/upload-models-r2.sh
+#
 # Required:
 #   ENV_NAME=staging|production
-#   MODEL_DIR=./out/sealed-models/qwen-0.5b   # contains expected-model-commitment.txt + model-meta.json
+#   MODEL_DIR=./out/sealed-models/qwen-0.5b   # expected-model-commitment.txt + model-meta.json
 #   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (R2)
 #
 # Optional:
