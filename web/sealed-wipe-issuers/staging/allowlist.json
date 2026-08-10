@@ -5,7 +5,7 @@
     {
       "id": "nexqloud-wipe-worker",
       "issuer": "nexqloud-wipe-worker",
-      "pubkey": "1cc6d5ce6f2987fd5728bd1c9a783c66e99ff08dc1ff694101b24e8e7d6a09b0",
+      "pubkey": "58ab5990ed38ee35191ce2acf76e65c4ace4fa8f3537957348727517cc462c6c",
       "note": "Rotate with scripts/gen-wipe-issuer.sh before first production deploy; never commit WIPE_ISSUER_PRIVKEY"
     }
   ]
