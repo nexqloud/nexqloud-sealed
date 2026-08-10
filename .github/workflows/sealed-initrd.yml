@@ -1,0 +1,138 @@
+name: sealed-initrd
+
+# Build static sealed-shim into a measured initrd, predict the SNP launch
+# measurement, cosign-sign to Rekor (push), upload boot bundle.
+#
+# Scripts live next to this workflow: .github/workflows/sealed-initrd/
+# Guest PID1: cmd/sealed-init
+#
+# GitHub-hosted runners cannot boot SEV-SNP. On a nanoserver:
+#   unpack artifact → ./run-vm.sh → SEALED_MEASUREMENT == expected-measurement.txt
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [stage, main]
+    paths:
+      - "cmd/shim/**"
+      - "cmd/sealed-init/**"
+      - "internal/**"
+      - "pkg/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/sealed-initrd.yml"
+      - ".github/workflows/sealed-initrd/**"
+  pull_request:
+    branches: [stage, main]
+    paths:
+      - "cmd/shim/**"
+      - "cmd/sealed-init/**"
+      - "internal/**"
+      - "pkg/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/sealed-initrd.yml"
+      - ".github/workflows/sealed-initrd/**"
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  KATA_VERSION: "4.0.0"
+  VCPU_TYPE: "EPYC-v4"
+  APPEND: "console=ttyS0 earlyprintk=serial,ttyS0 noreplace-smp"
+  OUT: out/sealed-initrd
+
+jobs:
+  build-measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd cpio gzip python3-venv ca-certificates
+
+      - name: Build measured initrd bundle
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          chmod +x .github/workflows/sealed-initrd/*.sh
+          .github/workflows/sealed-initrd/build.sh
+
+      - name: Pack boot bundle
+        run: |
+          set -euo pipefail
+          tar -C "${OUT}" -czf "sealed-initrd-bundle-${{ github.sha }}.tgz" \
+            sealed-initrd.img \
+            AMDSEV.fd \
+            vmlinuz \
+            expected-measurement.txt \
+            kernel-cmdline.txt \
+            MANIFEST.txt \
+            run-vm.sh \
+            rootfs/sealed-shim \
+            rootfs/init
+          ls -lh "sealed-initrd-bundle-${{ github.sha }}.tgz"
+          echo "---- MANIFEST ----"
+          cat "${OUT}/MANIFEST.txt"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sealed-initrd-bundle-${{ github.sha }}
+          path: sealed-initrd-bundle-${{ github.sha }}.tgz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign measurement blob (keyless → Rekor)
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --bundle "${OUT}/expected-measurement.sigstore.json" \
+            "${OUT}/expected-measurement.txt"
+          cosign sign-blob --yes \
+            --bundle "${OUT}/MANIFEST.sigstore.json" \
+            "${OUT}/MANIFEST.txt"
+          tar -C "${OUT}" -czf "sealed-initrd-bundle-${{ github.sha }}.tgz" \
+            sealed-initrd.img \
+            AMDSEV.fd \
+            vmlinuz \
+            expected-measurement.txt \
+            expected-measurement.sigstore.json \
+            kernel-cmdline.txt \
+            MANIFEST.txt \
+            MANIFEST.sigstore.json \
+            run-vm.sh \
+            rootfs/sealed-shim \
+            rootfs/init
+
+      - name: Re-upload signed bundle
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sealed-initrd-bundle-signed-${{ github.sha }}
+          path: |
+            sealed-initrd-bundle-${{ github.sha }}.tgz
+            out/sealed-initrd/expected-measurement.txt
+            out/sealed-initrd/expected-measurement.sigstore.json
+            out/sealed-initrd/MANIFEST.txt
+            out/sealed-initrd/MANIFEST.sigstore.json
+          if-no-files-found: error
+          retention-days: 30

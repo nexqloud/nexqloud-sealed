@@ -116,5 +116,5 @@ jobs:
           echo "Signing ${IMAGE_NAME}@${DIGEST} for ${{ steps.env.outputs.name }}"
           cosign sign --yes "${IMAGE_NAME}@${DIGEST}"
 
-      # Tier A (sev-snp-measure + expected launch measurement → Rekor) is deferred
-      # until ghcr.io/nexqloud/sealed-base-os (OVMF.fd + bzImage) is published.
+      # Launch measurement + Rekor: .github/workflows/sealed-initrd.yml
+      # (scripts in .github/workflows/sealed-initrd/, PID1 in cmd/sealed-init).

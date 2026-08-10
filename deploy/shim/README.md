@@ -39,8 +39,5 @@ digest into Rekor.
 | `main` | production | `:latest` | `:sha-<commit>` |
 | `v*` tags | production | `:latest` + semver | `:sha-<commit>` |
 
-**Tier A (deferred):** Predict the AMD SEV-SNP launch measurement with
-`sev-snp-measure` over golden `OVMF.fd` + guest `bzImage` + workload initrd, then
-sign `expected-measurement.txt` to Rekor. Blocked until
-`ghcr.io/nexqloud/sealed-base-os` (or equivalent pinned firmware/kernel assets)
-exists.
+**Launch measurement:** `.github/workflows/sealed-initrd.yml` (scripts beside it
+in `.github/workflows/sealed-initrd/`). Guest PID1 is `cmd/sealed-init`.

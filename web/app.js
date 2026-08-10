@@ -147,7 +147,7 @@ const RECEIPT_TOPICS = [
     label: 'Code Legit',
     description: 'Enclave measurement compared to verifier allowlist.',
     fieldHint: 'Look for "enclave_measurement" inside package.',
-    plainEnglish: 'Confirms the enclave was running approved software. The enclave_measurement value is compared against a list of known-good builds that this verifier trusts.',
+    plainEnglish: 'Confirms the guest launch measurement (AMD SNP MEASUREMENT from the attestation report) matches a known-good build published by CI. Package enclave_measurement must agree with the report when both are present.',
   },
   {
     id: 'model_legit',

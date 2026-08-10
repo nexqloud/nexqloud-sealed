@@ -36,3 +36,6 @@ receipt.json
 bootstrap
 
 vm1
+
+# Local / CI build trees
+/out/

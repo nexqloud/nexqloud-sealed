@@ -19,8 +19,19 @@ import (
 )
 
 const (
+	// Legacy fixture measurement (pre-Option A / pre-live Kata match).
 	KnownEnclaveMeasurement = "41f77fe5c1416343f84dbeeded504eb4a2c450861317ed3e4e46cd771c79243a4cbeb3d75ec663e6a7a47bd1f4fab503"
+	// Live kata-qemu-snp on EPYC-v4 + confidential guest image (NXQR9TMNE).
+	KataImageMeasurementEPYCv4 = "1af6826c5e0574dcbc8f940f5028f590104eba26b8627e90df0243dde111268c2c63dc0b1cfaa027115f7a13b4d316da"
 )
+
+// MeasurementCatalog is the set of launch measurements the verifier accepts for
+// Code Legit. Option A CI appends new values from expected-measurement.txt here
+// after a nanoserver boot confirms the match.
+var MeasurementCatalog = []string{
+	KataImageMeasurementEPYCv4,
+	KnownEnclaveMeasurement,
+}
 
 var ModelCatalog = map[string]string{
 	"mock-model": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -120,7 +131,7 @@ func verifyInferenceReceipt(wrapper ReceiptFile, challengeHex string, rootsCatal
 		checkSignature(wrapper, publicKey),
 		checkHardware(att, wrapper.CertChain, roots),
 		checkKeyBinding(att, wrapper.CertChain, publicKey, nonce),
-		checkCodeLegit(wrapper.Package),
+		checkCodeLegit(wrapper.Package, att),
 		checkModelLegit(wrapper.Package),
 		checkGPUWiped(wrapper.Package),
 		checkFreshness(nonceHex, challengeHex),
@@ -395,22 +406,47 @@ func enclaveKeyHash(pub ed25519.PublicKey, nonce []byte) [64]byte {
 	return sha512.Sum512(append(append([]byte{}, pub...), nonce...))
 }
 
-func checkCodeLegit(pkg map[string]any) Check {
+func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation) Check {
 	check := Check{
 		ID:    "code_legit",
 		Label: "Code Legit",
 	}
 
-	measurement, _ := pkg["enclave_measurement"].(string)
-	check.Hash = truncateHex(measurement)
+	pkgMeas, _ := pkg["enclave_measurement"].(string)
+	reportMeas := ""
+	if att != nil && att.Report != nil && len(att.Report.Measurement) > 0 {
+		reportMeas = hex.EncodeToString(att.Report.Measurement)
+	}
 
-	if measurement != KnownEnclaveMeasurement {
-		check.Detail = "enclave_measurement mismatch"
+	if reportMeas != "" && pkgMeas != "" && reportMeas != pkgMeas {
+		check.Hash = truncateHex(reportMeas)
+		check.Detail = "package enclave_measurement != attestation MEASUREMENT"
 		return check
 	}
 
-	check.OK = true
-	check.Detail = "measurement: " + truncateHex(measurement)
+	candidate := reportMeas
+	if candidate == "" {
+		candidate = pkgMeas
+	}
+	if candidate == "" {
+		check.Detail = "missing launch measurement"
+		return check
+	}
+	check.Hash = truncateHex(candidate)
+
+	for _, known := range MeasurementCatalog {
+		if candidate == known {
+			check.OK = true
+			src := "attestation"
+			if reportMeas == "" {
+				src = "package"
+			}
+			check.Detail = src + " measurement in catalog: " + truncateHex(candidate)
+			return check
+		}
+	}
+
+	check.Detail = "launch measurement not in catalog"
 	return check
 }
 
