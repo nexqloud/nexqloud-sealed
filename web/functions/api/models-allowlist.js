@@ -22,18 +22,28 @@ export async function onRequestGet(context) {
       cf: { cacheTtl: 60, cacheEverything: true },
     });
     if (resp.ok) {
-      const body = await resp.text();
-      return new Response(body, { status: 200, headers });
+      return new Response(await resp.text(), { status: 200, headers });
     }
   } catch (_) {
-    // fall through to same-origin static copy
+    // continue to static
   }
 
-  const local = new URL(`/sealed-models/${env}/allowlist.json`, url.origin);
-  const localResp = await fetch(local.toString());
-  const body = await localResp.text();
-  return new Response(body, {
-    status: localResp.status,
-    headers,
-  });
+  try {
+    const local = new URL(`/sealed-models/${env}/allowlist.json`, url.origin);
+    const localResp = await fetch(local.toString());
+    if (localResp.ok) {
+      return new Response(await localResp.text(), { status: 200, headers });
+    }
+  } catch (_) {
+    // continue
+  }
+
+  return new Response(
+    JSON.stringify({
+      error: "sealed-models allowlist not found",
+      env,
+      tried: [upstream, `/sealed-models/${env}/allowlist.json`],
+    }),
+    { status: 404, headers },
+  );
 }

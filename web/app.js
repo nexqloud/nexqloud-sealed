@@ -1117,11 +1117,18 @@ async function loadModelCommitments() {
   const envs = ['staging', 'production'];
   const seen = new Set();
   const out = [];
+  const tried = [];
   for (const env of envs) {
+    tried.push(
+      `/sealed-models/${encodeURIComponent(env)}/allowlist.json`,
+      `/api/models-allowlist?env=${encodeURIComponent(env)}`,
+      `${R2_PUBLIC_BASE}/${env}/sealed-models/allowlist.json`,
+    );
     let allowlist;
     try {
       allowlist = await loadModelsAllowlist(env);
-    } catch {
+    } catch (err) {
+      console.error('[sealed-verify] model allowlist parse failed', env, err);
       allowlist = null;
     }
     for (const e of allowlist?.entries || []) {
@@ -1130,6 +1137,11 @@ async function loadModelCommitments() {
       seen.add(c);
       out.push(c);
     }
+  }
+  if (out.length === 0) {
+    throw new Error(
+      `Model allowlist returned no commitments. Tried:\n${tried.join('\n')}`,
+    );
   }
   return out;
 }
@@ -1144,6 +1156,7 @@ async function runWasmVerify(receiptJSON) {
     measurement ? loadMeasurementProof(measurement) : Promise.resolve(null),
     loadModelCommitments(),
   ]);
+  console.info('[sealed-verify] model commitments loaded', models.length, models);
   const opts = proof
     ? { proofs: [proof], models }
     : { measurements: [], models };
