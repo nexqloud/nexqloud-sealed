@@ -3,6 +3,7 @@
 package enclave
 
 import (
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
@@ -13,7 +14,6 @@ import (
 	"github.com/google/go-sev-guest/abi"
 	"github.com/google/go-sev-guest/kds"
 	"github.com/google/go-sev-guest/proto/sevsnp"
-	sevverify "github.com/google/go-sev-guest/verify"
 	"github.com/google/go-sev-guest/verify/trust"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -62,6 +62,14 @@ func fetchAndStoreCertificateChain(pub ed25519.PublicKey) error {
 }
 
 func fetchCertificatesFromKDS(att *sevsnp.Attestation) (*sevsnp.Attestation, string, error) {
+	if att == nil || att.Report == nil {
+		return nil, "", fmt.Errorf("missing attestation report")
+	}
+	getter := &trust.RetryHTTPSGetter{
+		Timeout:       15 * time.Second,
+		MaxRetryDelay: 2 * time.Second,
+		Getter:        &trust.SimpleHTTPSGetter{},
+	}
 	var errs []error
 	for _, product := range kdsProductCandidates(att) {
 		line := kds.ProductLine(product)
@@ -69,34 +77,36 @@ func fetchCertificatesFromKDS(att *sevsnp.Attestation) (*sevsnp.Attestation, str
 		if !ok || report == nil {
 			return nil, "", fmt.Errorf("clone attestation report")
 		}
-		// go-sev-guest prefers report FMS over Options.Product when FMS != 0.
-		// Force the candidate's canonical FMS so the product line drives the
-		// KDS URL and the post-download VCEK productName check is skipped.
-		// Clearing FMS instead trips ParseProductName on Siena VCEKs, which
-		// carry productName "Genoa" without a -Bx stepping suffix.
 		report.Cpuid1EaxFms = abi.MaskedCpuid1EaxFromSevProduct(product)
 
-		opts := sevverify.DefaultOptions()
-		opts.Product = product
-		// DefaultHTTPSGetter retries for 2m per URL; wrong product lines 404
-		// and would block warmup for minutes. Keep retries short for probes.
-		opts.Getter = &trust.RetryHTTPSGetter{
-			Timeout:       20 * time.Second,
-			MaxRetryDelay: 2 * time.Second,
-			Getter:        &trust.SimpleHTTPSGetter{},
+		root, err := trust.GetDefaultRootCerts(line)
+		if err != nil || root == nil || root.ProductCerts == nil || root.ProductCerts.Ask == nil || root.ProductCerts.Ark == nil {
+			errs = append(errs, fmt.Errorf("%s: embedded ASK/ARK: %w", line, err))
+			continue
 		}
-		log.Printf("KDS: fetching certificate chain for product line %s", line)
-		filled, err := sevverify.GetAttestationFromReport(report, opts)
+
+		vcekURL := kds.VCEKCertURL(line, report.GetChipId(), kds.TCBVersion(report.GetReportedTcb()))
+		log.Printf("KDS: fetching VCEK for %s", line)
+		vcek, err := trust.GetWith(context.Background(), getter, vcekURL)
 		if err != nil {
 			log.Printf("KDS: %s failed: %v", line, err)
 			errs = append(errs, fmt.Errorf("%s: %w", line, err))
 			continue
 		}
-		if hasVCEK(filled.CertificateChain) {
-			log.Printf("KDS: %s ok", line)
-			return filled, line, nil
+		if len(vcek) == 0 {
+			errs = append(errs, fmt.Errorf("%s: empty VCEK", line))
+			continue
 		}
-		errs = append(errs, fmt.Errorf("%s: missing VCEK", line))
+		log.Printf("KDS: %s ok (VCEK %d bytes, ASK/ARK embedded)", line, len(vcek))
+		return &sevsnp.Attestation{
+			Report: report,
+			CertificateChain: &sevsnp.CertificateChain{
+				VcekCert: append([]byte(nil), vcek...),
+				AskCert:  append([]byte(nil), root.ProductCerts.Ask.Raw...),
+				ArkCert:  append([]byte(nil), root.ProductCerts.Ark.Raw...),
+				Extras:   map[string][]byte{},
+			},
+		}, line, nil
 	}
 	if len(errs) == 0 {
 		errs = append(errs, fmt.Errorf("no AMD SEV product candidates"))
@@ -132,9 +142,9 @@ func kdsProductCandidates(att *sevsnp.Attestation) []*sevsnp.SevProduct {
 	}
 	add(abi.SevProduct())
 
-	// Prefer Genoa first: Siena hosts are served under Genoa KDS paths, and
-	// Kata guests often expose an unmapped FMS. Wrong lines 404; order matters.
-	for _, line := range []string{"Genoa", "Turin", "Milan"} {
+	// Prefer Genoa: Siena is served under Genoa KDS. Skip Turin — it 404s on
+	// these chips and only burns DNS/HTTP budget.
+	for _, line := range []string{"Genoa", "Milan"} {
 		if p, err := kds.ParseProductLine(line); err == nil {
 			add(p)
 		}
