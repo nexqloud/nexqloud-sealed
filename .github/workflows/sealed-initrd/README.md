@@ -27,6 +27,7 @@ Published objects (also mirrored under `…/latest/`):
 - `expected-measurement.txt` (public gold measurement)
 - `expected-measurement.sigstore.json` / `MANIFEST*.` (Rekor cosign bundles)
 - `release.json` (sha + measurement + object keys)
+- `allowlist.json` (append-only index of measurements → proof object keys; Code Legit)
 
 ## Secrets / vars
 
@@ -60,8 +61,12 @@ aws s3api put-bucket-cors \
 
 (Or paste the same JSON under R2 bucket → Settings → CORS.)
 
-The public verifier also exposes a same-origin proxy at `/api/initrd-release?env=staging`
-when Pages Functions are enabled (`web/functions/`).
+The public verifier also exposes same-origin proxies when Pages Functions are enabled
+(`web/functions/`):
+
+- `/api/initrd-release?env=staging` — latest `release.json`
+- `/api/initrd-allowlist?env=staging` — append-only allowlist
+- `/api/initrd-object?key=staging/sealed-initrd/<sha>/expected-measurement.sigstore.json`
 
 
 ```bash

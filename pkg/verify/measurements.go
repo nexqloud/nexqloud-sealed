@@ -14,6 +14,10 @@ type InitrdRelease struct {
 	Environment string `json:"environment"`
 	GitSHA      string `json:"git_sha"`
 	Measurement string `json:"measurement"`
+	Objects     struct {
+		ExpectedMeasurement         string `json:"expected_measurement"`
+		ExpectedMeasurementSigstore string `json:"expected_measurement_sigstore"`
+	} `json:"objects"`
 }
 
 // InitrdReleaseURL returns the latest release.json URL for a deploy environment

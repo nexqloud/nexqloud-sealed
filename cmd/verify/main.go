@@ -21,8 +21,8 @@ func main() {
 	productLine := flag.String("product", "", "AMD product line for custom roots (e.g. Milan, Genoa)")
 	noColor := flag.Bool("no-color", false, "disable ANSI colors")
 	r2Base := flag.String("r2-base", pkgverify.DefaultR2PublicBase, "public R2 base URL for sealed-initrd releases")
-	initrdEnv := flag.String("initrd-env", "staging,production", "comma-separated R2 envs to load measurements from")
-	noFetchMeas := flag.Bool("no-fetch-measurements", false, "skip fetching published measurements from R2")
+	initrdEnv := flag.String("initrd-env", "staging,production", "comma-separated R2 envs to load allowlists from")
+	noFetchMeas := flag.Bool("no-fetch-measurements", false, "skip fetching Sigstore proofs / allowlists from R2")
 	flag.Parse()
 
 	args := flag.Args()
@@ -69,22 +69,36 @@ func main() {
 		catalog = pkgverify.ApplyCustomHardwareRoots(catalog, product, ask, ark)
 	}
 
-	var published []string
+	opts := pkgverify.VerifyOpts{
+		ChallengeHex: *challenge,
+		RootsCatalog: catalog,
+	}
+
 	if !*noFetchMeas {
 		envs := splitCSV(*initrdEnv)
-		published, err = pkgverify.FetchPublishedMeasurements(*r2Base, envs)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: fetch published measurements: %v (using embedded catalog only)\n", err)
-		} else if len(published) > 0 {
-			fmt.Fprintf(os.Stderr, "loaded %d published measurement(s) from R2\n", len(published))
+		meas := extractLaunchMeasurement(data)
+		if meas != "" {
+			proof, err := pkgverify.FetchProofForMeasurement(*r2Base, envs, meas)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: fetch Sigstore proof: %v (falling back to allowlist hex / embedded catalog)\n", err)
+				if hexes, herr := pkgverify.FetchAllowlistMeasurements(*r2Base, envs); herr == nil && len(hexes) > 0 {
+					opts.Measurements = hexes
+					fmt.Fprintf(os.Stderr, "loaded %d allowlist measurement(s) from R2\n", len(hexes))
+				}
+			} else {
+				opts.MeasurementProofs = []pkgverify.MeasurementProof{proof}
+				fmt.Fprintf(os.Stderr, "loaded Sigstore proof for measurement %s… (git %s, env %s)\n",
+					meas[:16], truncate(proof.GitSHA, 12), proof.Environment)
+			}
+		} else if hexes, err := pkgverify.FetchAllowlistMeasurements(*r2Base, envs); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: fetch allowlist: %v (using embedded catalog only)\n", err)
+		} else if len(hexes) > 0 {
+			opts.Measurements = hexes
+			fmt.Fprintf(os.Stderr, "loaded %d allowlist measurement(s) from R2\n", len(hexes))
 		}
 	}
 
-	result := pkgverify.VerifyReceiptJSONOpts(data, pkgverify.VerifyOpts{
-		ChallengeHex: *challenge,
-		RootsCatalog: catalog,
-		Measurements: published,
-	})
+	result := pkgverify.VerifyReceiptJSONOpts(data, opts)
 	if result.Error != "" {
 		fmt.Fprintf(os.Stderr, "%s\n", result.Error)
 		os.Exit(1)
@@ -94,6 +108,41 @@ func main() {
 	if !result.OverallOK {
 		os.Exit(1)
 	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+func extractLaunchMeasurement(receiptJSON []byte) string {
+	var wrapper struct {
+		Package     map[string]any  `json:"package"`
+		Attestation json.RawMessage `json:"attestation"`
+	}
+	if err := json.Unmarshal(receiptJSON, &wrapper); err != nil {
+		return ""
+	}
+	if wrapper.Package != nil {
+		if m, ok := wrapper.Package["enclave_measurement"].(string); ok {
+			m = strings.ToLower(strings.TrimSpace(m))
+			if len(m) == 96 {
+				return m
+			}
+		}
+	}
+	att := &sevsnp.Attestation{}
+	if len(wrapper.Attestation) > 0 && string(wrapper.Attestation) != "{}" {
+		if err := protojson.Unmarshal(wrapper.Attestation, att); err != nil {
+			return ""
+		}
+	}
+	if att.Report != nil && len(att.Report.Measurement) > 0 {
+		return fmt.Sprintf("%x", att.Report.Measurement)
+	}
+	return ""
 }
 
 func splitCSV(s string) []string {

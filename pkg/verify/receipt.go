@@ -26,8 +26,8 @@ const (
 	KataImageMeasurementEPYCv4 = "1af6826c5e0574dcbc8f940f5028f590104eba26b8627e90df0243dde111268c2c63dc0b1cfaa027115f7a13b4d316da"
 )
 
-// MeasurementCatalog is the embedded fallback allowlist for Code Legit.
-// Prefer published CI values from R2 (…/sealed-initrd/latest/release.json).
+// MeasurementCatalog is the embedded fallback allowlist for Code Legit when no
+// Sigstore MeasurementProofs are supplied (offline / fixture use).
 var MeasurementCatalog = []string{
 	KataImageMeasurementEPYCv4,
 	KnownEnclaveMeasurement,
@@ -73,13 +73,17 @@ func VerifyReceiptJSON(receiptJSON []byte, challengeHex string, rootsCatalog map
 	})
 }
 
-// VerifyOpts configures receipt verification. When Measurements is non-empty,
-// Code Legit uses those values (merged with the embedded catalog). Callers
-// should load published CI measurements from R2 release.json.
+// VerifyOpts configures receipt verification.
+//
+// Code Legit (Pattern 1): when MeasurementProofs is non-empty, the launch
+// measurement must match a proof whose cosign/Sigstore bundle verifies under
+// the sealed-initrd workflow identity. Otherwise Measurements (merged with the
+// embedded catalog) is used as a hex allowlist fallback.
 type VerifyOpts struct {
-	ChallengeHex string
-	RootsCatalog map[string]HardwareRoots
-	Measurements []string
+	ChallengeHex      string
+	RootsCatalog      map[string]HardwareRoots
+	Measurements      []string
+	MeasurementProofs []MeasurementProof
 }
 
 func VerifyReceiptJSONOpts(receiptJSON []byte, opts VerifyOpts) ReceiptResult {
@@ -149,13 +153,12 @@ func verifyInferenceReceipt(wrapper ReceiptFile, opts VerifyOpts) ReceiptResult 
 	}
 
 	roots := pickHardwareRoots(att, opts.RootsCatalog)
-	measurements := EffectiveMeasurements(opts.Measurements)
 
 	result.Checks = append(result.Checks,
 		checkSignature(wrapper, publicKey),
 		checkHardware(att, wrapper.CertChain, roots),
 		checkKeyBinding(att, wrapper.CertChain, publicKey, nonce),
-		checkCodeLegit(wrapper.Package, att, measurements),
+		checkCodeLegit(wrapper.Package, att, opts),
 		checkModelLegit(wrapper.Package),
 		checkGPUWiped(wrapper.Package),
 		checkFreshness(nonceHex, opts.ChallengeHex),
@@ -430,7 +433,7 @@ func enclaveKeyHash(pub ed25519.PublicKey, nonce []byte) [64]byte {
 	return sha512.Sum512(append(append([]byte{}, pub...), nonce...))
 }
 
-func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, catalog []string) Check {
+func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, opts VerifyOpts) Check {
 	check := Check{
 		ID:    "code_legit",
 		Label: "Code Legit",
@@ -459,16 +462,41 @@ func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, catalog []strin
 	}
 	check.Hash = truncateHex(candidate)
 
-	if len(catalog) == 0 {
-		catalog = MeasurementCatalog
+	src := "attestation"
+	if reportMeas == "" {
+		src = "package"
 	}
+
+	if len(opts.MeasurementProofs) > 0 {
+		var lastErr error
+		for _, proof := range opts.MeasurementProofs {
+			if err := VerifyCosignBlobBundle(proof.PayloadBytes(), proof.BundleJSON); err != nil {
+				lastErr = err
+				continue
+			}
+			if MeasurementFromPayload(proof.PayloadBytes()) != candidate {
+				continue
+			}
+			check.OK = true
+			detail := src + " measurement has valid Sigstore proof: " + truncateHex(candidate)
+			if proof.GitSHA != "" {
+				detail += " (git " + truncateHex(proof.GitSHA) + ")"
+			}
+			check.Detail = detail
+			return check
+		}
+		if lastErr != nil {
+			check.Detail = "no valid Sigstore proof for launch measurement: " + lastErr.Error()
+		} else {
+			check.Detail = "no Sigstore proof matched launch measurement"
+		}
+		return check
+	}
+
+	catalog := EffectiveMeasurements(opts.Measurements)
 	for _, known := range catalog {
 		if candidate == strings.ToLower(strings.TrimSpace(known)) {
 			check.OK = true
-			src := "attestation"
-			if reportMeas == "" {
-				src = "package"
-			}
 			check.Detail = src + " measurement in published catalog: " + truncateHex(candidate)
 			return check
 		}

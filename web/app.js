@@ -147,7 +147,7 @@ const RECEIPT_TOPICS = [
     label: 'Code Legit',
     description: 'Enclave measurement compared to verifier allowlist.',
     fieldHint: 'Look for "enclave_measurement" inside package.',
-    plainEnglish: 'Confirms the guest launch measurement (AMD SNP MEASUREMENT from the attestation report) matches a known-good build published by CI to public R2 (sealed-initrd/latest/release.json). Package enclave_measurement must agree with the report when both are present.',
+    plainEnglish: 'Confirms the guest launch measurement (AMD SNP MEASUREMENT) has a NexQloud CI Sigstore proof: the measurement was signed by the sealed-initrd GitHub Actions workflow and recorded in Rekor. Package enclave_measurement must agree with the report when both are present.',
   },
   {
     id: 'model_legit',
@@ -996,41 +996,127 @@ function hideStatus() {
   document.getElementById('status').hidden = true;
 }
 
-async function loadPublishedMeasurements() {
-  const envs = ['staging', 'production'];
-  const out = [];
-  for (const env of envs) {
-    const urls = [
-      `/api/initrd-release?env=${encodeURIComponent(env)}`,
-      `https://pub-84b99924d959400aa97608c84bbd8000.r2.dev/${env}/sealed-initrd/latest/release.json`,
-    ];
-    for (const url of urls) {
-      try {
-        const resp = await fetch(url, { cache: 'no-store' });
-        if (!resp.ok) continue;
-        const rel = await resp.json();
-        if (rel && typeof rel.measurement === 'string' && rel.measurement.length === 96) {
-          out.push(rel.measurement.toLowerCase());
-          break;
-        }
-      } catch {
-        // try next URL
-      }
+const R2_PUBLIC_BASE = 'https://pub-84b99924d959400aa97608c84bbd8000.r2.dev';
+
+function extractReceiptMeasurement(receiptJSON) {
+  try {
+    const receipt = JSON.parse(receiptJSON);
+    const m = receipt?.package?.enclave_measurement;
+    if (typeof m === 'string' && m.trim().length === 96) {
+      return m.trim().toLowerCase();
+    }
+  } catch {
+    // ignore
+  }
+  return '';
+}
+
+async function fetchFirstOK(urls) {
+  for (const url of urls) {
+    try {
+      const resp = await fetch(url, { cache: 'no-store' });
+      if (resp.ok) return resp;
+    } catch {
+      // try next
     }
   }
-  return out;
+  return null;
+}
+
+async function loadAllowlist(env) {
+  const resp = await fetchFirstOK([
+    `/api/initrd-allowlist?env=${encodeURIComponent(env)}`,
+    `${R2_PUBLIC_BASE}/${env}/sealed-initrd/allowlist.json`,
+  ]);
+  if (!resp) return null;
+  return resp.json();
+}
+
+async function loadObjectText(key) {
+  const resp = await fetchFirstOK([
+    `/api/initrd-object?key=${encodeURIComponent(key)}`,
+    `${R2_PUBLIC_BASE}/${key}`,
+  ]);
+  if (!resp) return null;
+  return resp.text();
+}
+
+async function loadMeasurementProof(measurement) {
+  const envs = ['staging', 'production'];
+  const m = (measurement || '').toLowerCase().trim();
+  if (!m) return null;
+
+  for (const env of envs) {
+    let allowlist;
+    try {
+      allowlist = await loadAllowlist(env);
+    } catch {
+      allowlist = null;
+    }
+    const entry = (allowlist?.entries || []).find(
+      (e) => (e.measurement || '').toLowerCase().trim() === m,
+    );
+    if (entry?.expected_measurement && entry?.expected_measurement_sigstore) {
+      const proof = await proofFromKeys(env, entry.git_sha || '', entry.expected_measurement, entry.expected_measurement_sigstore);
+      if (proof) return proof;
+    }
+  }
+
+  for (const env of envs) {
+    const resp = await fetchFirstOK([
+      `/api/initrd-release?env=${encodeURIComponent(env)}`,
+      `${R2_PUBLIC_BASE}/${env}/sealed-initrd/latest/release.json`,
+    ]);
+    if (!resp) continue;
+    let rel;
+    try {
+      rel = await resp.json();
+    } catch {
+      continue;
+    }
+    if ((rel?.measurement || '').toLowerCase().trim() !== m) continue;
+    const payloadKey = rel.objects?.expected_measurement
+      || `${env}/sealed-initrd/${rel.git_sha}/expected-measurement.txt`;
+    const bundleKey = rel.objects?.expected_measurement_sigstore
+      || `${env}/sealed-initrd/${rel.git_sha}/expected-measurement.sigstore.json`;
+    const proof = await proofFromKeys(env, rel.git_sha || '', payloadKey, bundleKey);
+    if (proof) return proof;
+  }
+  return null;
+}
+
+async function proofFromKeys(env, gitSha, payloadKey, bundleKey) {
+  const payload = await loadObjectText(payloadKey);
+  const bundleText = await loadObjectText(bundleKey);
+  if (payload == null || bundleText == null) return null;
+  let bundle;
+  try {
+    bundle = JSON.parse(bundleText);
+  } catch {
+    return null;
+  }
+  return {
+    environment: env,
+    git_sha: gitSha,
+    payload,
+    bundle,
+  };
 }
 
 async function runWasmVerify(receiptJSON) {
   if (!wasmReady) throw new Error('Wasm module not loaded');
 
   const challenge = document.getElementById('challenge-input').value.trim();
-  setStatus('Fetching published launch measurements from R2…');
-  const measurements = await loadPublishedMeasurements();
+  setStatus('Fetching Sigstore proof for launch measurement…');
+  const measurement = extractReceiptMeasurement(receiptJSON);
+  const proof = measurement ? await loadMeasurementProof(measurement) : null;
+  const opts = proof
+    ? { proofs: [proof] }
+    : { measurements: [] };
   const resultJSON = globalThis.verifyReceipt(
     receiptJSON,
     challenge,
-    JSON.stringify(measurements),
+    JSON.stringify(opts),
   );
   const result = JSON.parse(resultJSON);
 

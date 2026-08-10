@@ -106,6 +106,69 @@ put "${OUT}/MANIFEST.txt" "${SHA_PREFIX}/MANIFEST.txt" "text/plain; charset=utf-
 put "${OUT}/MANIFEST.sigstore.json" "${SHA_PREFIX}/MANIFEST.sigstore.json" "application/json"
 put "${RELEASE_JSON}" "${SHA_PREFIX}/release.json" "application/json"
 
+# Append-only public allowlist for Code Legit (Pattern 1 / Sigstore proofs)
+ALLOWLIST_KEY="${PREFIX}/allowlist.json"
+ALLOWLIST_LOCAL="${OUT}/allowlist.json"
+ALLOWLIST_PREV="${OUT}/allowlist.prev.json"
+rm -f "${ALLOWLIST_PREV}"
+aws --endpoint-url "${R2_ENDPOINT}" s3 cp "s3://${R2_BUCKET}/${ALLOWLIST_KEY}" "${ALLOWLIST_PREV}" \
+  --only-show-errors 2>/dev/null || true
+
+MEASUREMENT="${MEASUREMENT}" \
+ENV_NAME="${ENV_NAME}" \
+GIT_SHA="${GIT_SHA}" \
+REKOR_MEAS="${REKOR_MEAS}" \
+SHA_PREFIX="${SHA_PREFIX}" \
+ALLOWLIST_PREV="${ALLOWLIST_PREV}" \
+ALLOWLIST_LOCAL="${ALLOWLIST_LOCAL}" \
+python3 - <<'PY'
+import json, os, pathlib
+
+def idx(raw):
+    raw = (raw or "").strip()
+    return int(raw) if raw.isdigit() else None
+
+prev_path = pathlib.Path(os.environ["ALLOWLIST_PREV"])
+if prev_path.is_file():
+    data = json.loads(prev_path.read_text(encoding="utf-8"))
+else:
+    data = {
+        "schema": "nexqloud-sealed-initrd-allowlist/1",
+        "environment": os.environ["ENV_NAME"],
+        "entries": [],
+    }
+
+measurement = os.environ["MEASUREMENT"].lower().strip()
+entry = {
+    "git_sha": os.environ["GIT_SHA"],
+    "measurement": measurement,
+    "expected_measurement": f"{os.environ['SHA_PREFIX']}/expected-measurement.txt",
+    "expected_measurement_sigstore": f"{os.environ['SHA_PREFIX']}/expected-measurement.sigstore.json",
+}
+ri = idx(os.environ.get("REKOR_MEAS"))
+if ri is not None:
+    entry["rekor_log_index"] = ri
+
+entries = data.get("entries") or []
+replaced = False
+for i, e in enumerate(entries):
+    if (e.get("measurement") or "").lower().strip() == measurement:
+        entries[i] = entry
+        replaced = True
+        break
+if not replaced:
+    entries.append(entry)
+
+data["schema"] = "nexqloud-sealed-initrd-allowlist/1"
+data["environment"] = os.environ["ENV_NAME"]
+data["entries"] = entries
+pathlib.Path(os.environ["ALLOWLIST_LOCAL"]).write_text(
+    json.dumps(data, indent=2) + "\n", encoding="utf-8"
+)
+PY
+
+put "${ALLOWLIST_LOCAL}" "${ALLOWLIST_KEY}" "application/json"
+
 # Stable pointers for verifiers / humans
 put "${BUNDLE_TGZ}" "${LATEST_PREFIX}/sealed-initrd-bundle.tgz" "application/gzip"
 put "${OUT}/expected-measurement.txt" "${LATEST_PREFIX}/expected-measurement.txt" "text/plain; charset=utf-8"
@@ -118,6 +181,7 @@ BASE="${R2_PUBLIC_BASE_URL%/}"
 {
   echo "public_latest_measurement=${BASE}/${LATEST_PREFIX}/expected-measurement.txt"
   echo "public_latest_release=${BASE}/${LATEST_PREFIX}/release.json"
+  echo "public_allowlist=${BASE}/${PREFIX}/allowlist.json"
   echo "public_sha_bundle=${BASE}/${SHA_PREFIX}/sealed-initrd-bundle.tgz"
   echo "measurement=${MEASUREMENT}"
   if [[ -n "${REKOR_MEAS}" ]]; then

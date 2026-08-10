@@ -4,6 +4,8 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"syscall/js"
 
 	"nexqloud-sealed/pkg/verify"
@@ -25,6 +27,10 @@ func main() {
 	<-make(chan struct{})
 }
 
+// verifyReceipt(receiptJSON, challengeHex?, optsJSON?)
+// optsJSON may be:
+//   - legacy: JSON array of measurement hex strings
+//   - object: {"measurements":[...],"proofs":[{"payload":"...","bundle":{...},...}]}
 func verifyReceipt(_ js.Value, args []js.Value) any {
 	if len(args) < 1 {
 		return errorResult("expected receipt JSON string")
@@ -35,26 +41,52 @@ func verifyReceipt(_ js.Value, args []js.Value) any {
 	if len(args) > 1 {
 		challengeHex = args[1].String()
 	}
-	var measurements []string
+
+	opts := verify.VerifyOpts{
+		ChallengeHex: challengeHex,
+		RootsCatalog: hardwareRootsCatalog,
+	}
 	if len(args) > 2 && args[2].Truthy() {
 		raw := args[2].String()
 		if raw != "" {
-			if err := json.Unmarshal([]byte(raw), &measurements); err != nil {
-				return errorResult("parse measurements JSON: " + err.Error())
+			if err := applyVerifyOptsJSON(&opts, raw); err != nil {
+				return errorResult(err.Error())
 			}
 		}
 	}
 
-	result := verify.VerifyReceiptJSONOpts([]byte(receiptJSON), verify.VerifyOpts{
-		ChallengeHex: challengeHex,
-		RootsCatalog: hardwareRootsCatalog,
-		Measurements: measurements,
-	})
+	result := verify.VerifyReceiptJSONOpts([]byte(receiptJSON), opts)
 	out, err := json.Marshal(result)
 	if err != nil {
 		return errorResult(err.Error())
 	}
 	return string(out)
+}
+
+func applyVerifyOptsJSON(opts *verify.VerifyOpts, raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	if trimmed[0] == '[' {
+		var measurements []string
+		if err := json.Unmarshal([]byte(raw), &measurements); err != nil {
+			return fmt.Errorf("parse measurements JSON: %w", err)
+		}
+		opts.Measurements = measurements
+		return nil
+	}
+
+	var wire struct {
+		Measurements []string                  `json:"measurements"`
+		Proofs       []verify.MeasurementProof `json:"proofs"`
+	}
+	if err := json.Unmarshal([]byte(raw), &wire); err != nil {
+		return fmt.Errorf("parse verify opts JSON: %w", err)
+	}
+	opts.Measurements = wire.Measurements
+	opts.MeasurementProofs = wire.Proofs
+	return nil
 }
 
 func errorResult(msg string) string {
