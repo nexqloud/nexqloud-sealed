@@ -170,25 +170,28 @@ func setupResolvConfFromEnv() error {
 		log("SEALED_DNS_SKIP NEXQLOUD_NET_DNS unset")
 		return nil
 	}
-	var b strings.Builder
-	b.WriteString("# written by sealed-init\n")
-	b.WriteString("options timeout:2 attempts:2\n")
+	var primary string
 	for _, ns := range strings.Fields(strings.ReplaceAll(dns, ",", " ")) {
 		ns = strings.TrimSpace(ns)
-		if ns == "" {
-			continue
+		if ns != "" {
+			primary = ns
+			break
 		}
-		b.WriteString("nameserver ")
-		b.WriteString(ns)
-		b.WriteByte('\n')
 	}
-	if b.Len() == 0 {
+	if primary == "" {
 		return fmt.Errorf("NEXQLOUD_NET_DNS empty after parse")
 	}
-	if err := os.WriteFile("/etc/resolv.conf", []byte(b.String()), 0644); err != nil {
+	// One nameserver only: Go rotates across all entries and a flaky secondary
+	// (e.g. 8.8.8.8 blocked on some nanoserver egress paths) burns KDS budget.
+	body := "# written by sealed-init\noptions timeout:2 attempts:2\nnameserver " + primary + "\n"
+	if err := os.WriteFile("/etc/resolv.conf", []byte(body), 0644); err != nil {
 		return err
 	}
-	log("SEALED_DNS_OK " + dns)
+	if extras := strings.TrimSpace(strings.TrimPrefix(dns, primary)); extras != "" {
+		log("SEALED_DNS_OK " + primary + " (ignored extra: " + strings.TrimSpace(extras) + ")")
+	} else {
+		log("SEALED_DNS_OK " + primary)
+	}
 	return nil
 }
 
