@@ -164,6 +164,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	inferOut, err := s.inference.Complete(req)
 	if err != nil {
+		log.Printf("inference failed: %v", err)
 		http.Error(w, "inference failed", http.StatusBadGateway)
 		return
 	}
