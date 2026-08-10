@@ -41,7 +41,7 @@ func main() {
 		log.Fatalf("worker commitment: %v", err)
 	}
 	log.Printf("wipe-worker listening on %s issuer=%s commitment=%s mode=%s",
-		addr, issuer, commitment, envOr("WIPE_MODE", wipe.ModeAuto))
+		addr, issuer, commitment, envOr("WIPE_MODE", wipe.ModeCUDA))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

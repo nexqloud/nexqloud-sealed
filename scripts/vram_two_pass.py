@@ -3,17 +3,36 @@
 from __future__ import annotations
 
 import ctypes
+import ctypes.util
 import sys
 
 
 MARKER = 0xA5
 
 
+def load_cudart():
+    names = [
+        "libcudart.so",
+        "libcudart.so.12",
+        "libcudart.so.11",
+    ]
+    found = ctypes.util.find_library("cudart")
+    if found:
+        names.insert(0, found)
+    last = None
+    for name in names:
+        try:
+            return ctypes.CDLL(name)
+        except OSError as e:
+            last = e
+    raise OSError(f"libcudart not found (tried {names}): {last}")
+
+
 def main() -> int:
     try:
-        cudart = ctypes.CDLL("libcudart.so")
+        cudart = load_cudart()
     except OSError as e:
-        print(f"libcudart.so not found: {e}", file=sys.stderr)
+        print(f"{e}", file=sys.stderr)
         return 1
 
     cudart.cudaMalloc.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_size_t]
@@ -28,6 +47,18 @@ def main() -> int:
         ctypes.POINTER(ctypes.c_size_t),
     ]
     cudart.cudaMemGetInfo.restype = ctypes.c_int
+    cudart.cudaGetDeviceCount.argtypes = [ctypes.POINTER(ctypes.c_int)]
+    cudart.cudaGetDeviceCount.restype = ctypes.c_int
+    cudart.cudaSetDevice.argtypes = [ctypes.c_int]
+    cudart.cudaSetDevice.restype = ctypes.c_int
+
+    n = ctypes.c_int(0)
+    if cudart.cudaGetDeviceCount(ctypes.byref(n)) != 0 or n.value < 1:
+        print("no CUDA device visible", file=sys.stderr)
+        return 1
+    if cudart.cudaSetDevice(0) != 0:
+        print("cudaSetDevice(0) failed", file=sys.stderr)
+        return 1
 
     free_b = ctypes.c_size_t()
     total_b = ctypes.c_size_t()
@@ -35,7 +66,7 @@ def main() -> int:
         print("cudaMemGetInfo failed", file=sys.stderr)
         return 1
 
-    # Leave headroom so the driver/llama process can stay alive.
+    # Leave headroom so llama (sharing the GPU) can stay alive.
     reserve = max(64 << 20, int(free_b.value * 0.05))
     size = free_b.value - reserve
     if size < (16 << 20):
@@ -64,7 +95,7 @@ def main() -> int:
     finally:
         cudart.cudaFree(ptr)
 
-    print(f"wiped_bytes={size}")
+    print(f"wiped_bytes={size} free_before={free_b.value} total={total_b.value}")
     return 0
 
 

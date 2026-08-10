@@ -10,17 +10,21 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/wipe-worker ./cmd/wipe-worker
 
-FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
+# CUDA runtime so vram_two_pass.py can load libcudart and wipe device memory.
+FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04
 
-RUN apk add --no-cache ca-certificates
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /out/wipe-worker /usr/local/bin/wipe-worker
 COPY scripts/vram_two_pass.py /usr/local/bin/vram_two_pass.py
+RUN chmod 755 /usr/local/bin/wipe-worker /usr/local/bin/vram_two_pass.py
 
 ENV WIPE_LISTEN=0.0.0.0:19001
+ENV WIPE_MODE=cuda
 ENV WIPE_CUDA_HELPER=/usr/local/bin/vram_two_pass.py
 
 EXPOSE 19001
 
-USER nobody
 ENTRYPOINT ["/usr/local/bin/wipe-worker"]

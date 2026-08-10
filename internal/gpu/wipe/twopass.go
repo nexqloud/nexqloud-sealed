@@ -20,25 +20,20 @@ const (
 var gpuMu sync.Mutex
 
 // TwoPass runs marker-then-zero wipe under a per-process GPU lock.
-// WIPE_MODE: auto (cuda then fail), cuda, host-buffer (tests/CI only).
+// WIPE_MODE: cuda (default, real VRAM), auto (alias of cuda), host-buffer (CI only).
 func TwoPass() error {
 	gpuMu.Lock()
 	defer gpuMu.Unlock()
 
 	mode := strings.TrimSpace(os.Getenv("WIPE_MODE"))
 	if mode == "" {
-		mode = ModeAuto
+		mode = ModeCUDA
 	}
 	switch mode {
 	case ModeHostBuffer:
 		return twoPassHostBuffer(64 << 20)
-	case ModeCUDA:
+	case ModeCUDA, ModeAuto:
 		return twoPassCUDA()
-	case ModeAuto:
-		if err := twoPassCUDA(); err != nil {
-			return fmt.Errorf("cuda wipe failed (set WIPE_MODE=host-buffer only for non-GPU tests): %w", err)
-		}
-		return nil
 	default:
 		return fmt.Errorf("unknown WIPE_MODE %q", mode)
 	}
