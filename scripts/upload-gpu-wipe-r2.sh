@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Publish GPU wipe allowlists (policies, issuers, workers) to R2.
+# Publish GPU policy + wipe issuer allowlists to R2 (not workers — those are
+# published by wipe-worker-image.yml from the real binary sha256).
 #
 #   ENV_NAME=staging ./scripts/upload-gpu-wipe-r2.sh
-#
-# Reads committed Pages copies under web/sealed-*/${ENV_NAME}/allowlist.json
 set -euo pipefail
 
 ENV_NAME="${ENV_NAME:?ENV_NAME required (staging|production)}"
@@ -25,10 +24,11 @@ put() {
   echo "  s3://${R2_BUCKET}/${key}"
 }
 
-for kind in sealed-gpu-policies sealed-wipe-issuers sealed-wipe-workers; do
+for kind in sealed-gpu-policies sealed-wipe-issuers; do
   src="${ROOT}/web/${kind}/${ENV_NAME}/allowlist.json"
   [[ -f "${src}" ]] || { echo "missing ${src}" >&2; exit 1; }
   put "${src}" "${ENV_NAME}/${kind}/allowlist.json"
 done
 
-echo "published GPU wipe allowlists for ${ENV_NAME}"
+echo "published GPU policy + wipe issuer allowlists for ${ENV_NAME}"
+echo "note: sealed-wipe-workers is published by wipe-worker-image.yml from the binary hash"

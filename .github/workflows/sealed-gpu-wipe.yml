@@ -7,7 +7,6 @@ on:
     paths:
       - "web/sealed-gpu-policies/**"
       - "web/sealed-wipe-issuers/**"
-      - "web/sealed-wipe-workers/**"
       - "scripts/upload-gpu-wipe-r2.sh"
       - ".github/workflows/sealed-gpu-wipe.yml"
 

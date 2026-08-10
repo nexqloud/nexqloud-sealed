@@ -8,7 +8,9 @@ import (
 	"strings"
 )
 
-// SelfCommitment returns sha256 of this process executable, or WIPE_WORKER_COMMITMENT if set.
+// SelfCommitment returns sha256 of this process executable.
+// WIPE_WORKER_COMMITMENT overrides only when set (unit tests); production
+// containers must omit it so the cert binds the real binary hash.
 func SelfCommitment() (string, error) {
 	if v := strings.TrimSpace(os.Getenv("WIPE_WORKER_COMMITMENT")); v != "" {
 		if !strings.HasPrefix(v, "sha256:") {

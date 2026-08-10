@@ -9,6 +9,7 @@ on:
       - "internal/gpu/**"
       - "deploy/wipe-worker/**"
       - "scripts/vram_two_pass.py"
+      - "scripts/publish-wipe-workers-allowlist.sh"
       - "go.mod"
       - "go.sum"
       - ".dockerignore"
@@ -20,6 +21,7 @@ on:
       - "internal/gpu/**"
       - "deploy/wipe-worker/**"
       - "scripts/vram_two_pass.py"
+      - "scripts/publish-wipe-workers-allowlist.sh"
       - "go.mod"
       - "go.sum"
       - ".dockerignore"
@@ -27,12 +29,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
   id-token: write
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}/sealed-wipe
+  R2_ACCOUNT_ID: "285ada7dda5a9110cc820302071df4f1"
+  R2_BUCKET: "nexqloud-sealed-ai"
 
 jobs:
   build:
@@ -92,12 +96,55 @@ jobs:
           context: .
           file: deploy/wipe-worker/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
           sbom: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Read binary commitment from image
+        id: commitment
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          DIGEST="${{ steps.build.outputs.digest }}"
+          if [ -z "${DIGEST}" ]; then
+            echo "missing image digest" >&2
+            exit 1
+          fi
+          REF="${IMAGE_NAME}@${DIGEST}"
+          echo "Using image ${REF}"
+          docker pull "${REF}"
+          COMMITMENT="$(docker run --rm --entrypoint cat "${REF}" /usr/local/share/nexqloud/wipe-worker.commitment | tr -d '[:space:]')"
+          case "${COMMITMENT}" in
+            sha256:*) ;;
+            *) echo "invalid commitment from image: ${COMMITMENT}" >&2; exit 1 ;;
+          esac
+          echo "commitment=${COMMITMENT}"
+          echo "value=${COMMITMENT}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish workers allowlist (R2 + repo)
+        if: github.event_name != 'pull_request' && steps.env.outputs.name != 'preview'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ENV_NAME: ${{ steps.env.outputs.name }}
+          COMMITMENT: ${{ steps.commitment.outputs.value }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/publish-wipe-workers-allowlist.sh
+          PUBLISH_R2=1 ./scripts/publish-wipe-workers-allowlist.sh
+          if git diff --quiet -- web/sealed-wipe-workers/"${ENV_NAME}"/allowlist.json; then
+            echo "workers allowlist already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/sealed-wipe-workers/"${ENV_NAME}"/allowlist.json
+          git commit -m "chore(wipe): pin worker commitment ${COMMITMENT:7:12}… (${ENV_NAME})"
+          git push
 
       - name: Install cosign
         if: github.event_name != 'pull_request'
