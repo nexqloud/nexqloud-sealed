@@ -1,24 +1,18 @@
 #!/usr/bin/env bash
-# Hash a single Hugging Face GGUF file for sealed Model Legit commitments.
+# Hash a Hugging Face GGUF for sealed Model Legit and stage a local copy for R2.
 #
-# Default pin matches what sealed-llama serves today:
-#   llama-server -hf Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
+# Usage (single model):
+#   MODEL_ID=qwen-0.5b HF_REPO=... HF_REVISION=... HF_FILE=... QUANT=Q4_K_M \
+#     OUT_DIR=./out/sealed-models/qwen-0.5b ./scripts/hash-hf-gguf.sh
 #
-# Pinned (do not silently follow "latest"):
-#   repo:     Qwen/Qwen2.5-0.5B-Instruct-GGUF
-#   revision: 9217f5db79a29953eb74d5343926648285ec7e67
-#   file:     qwen2.5-0.5b-instruct-q4_k_m.gguf
-#
-# Usage:
-#   ./scripts/hash-hf-gguf.sh
-#   HF_REPO=... HF_REVISION=... HF_FILE=... OUT_DIR=./out/sealed-models ./scripts/hash-hf-gguf.sh
+# Catalog-driven CI uses scripts/hash-catalog-models.sh which loops catalog.yaml.
 set -euo pipefail
 
-HF_REPO="${HF_REPO:-Qwen/Qwen2.5-0.5B-Instruct-GGUF}"
-HF_REVISION="${HF_REVISION:-9217f5db79a29953eb74d5343926648285ec7e67}"
-HF_FILE="${HF_FILE:-qwen2.5-0.5b-instruct-q4_k_m.gguf}"
-QUANT="${QUANT:-Q4_K_M}"
-MODEL_ID="${MODEL_ID:-qwen-0.5b}"
+HF_REPO="${HF_REPO:?HF_REPO required}"
+HF_REVISION="${HF_REVISION:?HF_REVISION required}"
+HF_FILE="${HF_FILE:?HF_FILE required}"
+QUANT="${QUANT:-}"
+MODEL_ID="${MODEL_ID:?MODEL_ID required}"
 OUT_DIR="${OUT_DIR:-$(pwd)/out/sealed-models/${MODEL_ID}}"
 CACHE_DIR="${CACHE_DIR:-${HOME}/.cache/nexqloud-sealed/hf-gguf}"
 
@@ -42,19 +36,23 @@ COMMITMENT="sha256:${HEX}"
 
 COMMIT_FILE="${OUT_DIR}/expected-model-commitment.txt"
 META_FILE="${OUT_DIR}/model-meta.json"
+GGUF_OUT="${OUT_DIR}/model.gguf"
 
 printf '%s\n' "${COMMITMENT}" > "${COMMIT_FILE}"
+cp -f "${LOCAL}" "${GGUF_OUT}"
 
-python3 - "${META_FILE}" <<PY
+BYTES=$(wc -c < "${LOCAL}" | tr -d ' ')
+export MODEL_ID HF_REPO HF_REVISION HF_FILE QUANT COMMITMENT BYTES
+python3 - "${META_FILE}" <<'PY'
 import json, os, sys
 meta = {
-    "id": os.environ.get("MODEL_ID", "${MODEL_ID}"),
-    "commitment": "${COMMITMENT}",
-    "hf_repo": "${HF_REPO}",
-    "revision": "${HF_REVISION}",
-    "file": "${HF_FILE}",
-    "quant": "${QUANT}",
-    "bytes": $(wc -c < "${LOCAL}" | tr -d ' '),
+    "id": os.environ["MODEL_ID"],
+    "commitment": os.environ["COMMITMENT"],
+    "hf_repo": os.environ["HF_REPO"],
+    "revision": os.environ["HF_REVISION"],
+    "file": os.environ["HF_FILE"],
+    "quant": os.environ.get("QUANT", ""),
+    "bytes": int(os.environ["BYTES"]),
 }
 with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(meta, f, indent=2)
@@ -64,3 +62,4 @@ PY
 echo "${COMMITMENT}"
 echo "==> wrote ${COMMIT_FILE}" >&2
 echo "==> wrote ${META_FILE}" >&2
+echo "==> wrote ${GGUF_OUT}" >&2

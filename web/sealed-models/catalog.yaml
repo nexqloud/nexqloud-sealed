@@ -1,0 +1,9 @@
+# Manifest of models published by sealed-models CI.
+# Add a model = edit this file + merge to stage/main. CI hashes, uploads GGUF,
+# and rebuilds the full allowlist. Do not hand-edit R2.
+models:
+  - id: qwen-0.5b
+    hf_repo: Qwen/Qwen2.5-0.5B-Instruct-GGUF
+    revision: 9217f5db79a29953eb74d5343926648285ec7e67
+    file: qwen2.5-0.5b-instruct-q4_k_m.gguf
+    quant: Q4_K_M

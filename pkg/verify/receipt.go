@@ -17,13 +17,10 @@ import (
 
 	"nexqloud-sealed/internal/attest"
 	"nexqloud-sealed/internal/gpu"
+	"nexqloud-sealed/internal/modelattest"
 	"nexqloud-sealed/internal/receipt"
 	iv "nexqloud-sealed/internal/verify"
 )
-
-var ModelCatalog = map[string]string{
-	"mock-model": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-}
 
 type Check struct {
 	ID             string `json:"id"`
@@ -71,22 +68,22 @@ func VerifyReceiptJSON(receiptJSON []byte, challengeHex string, rootsCatalog map
 // the sealed-initrd workflow identity. Otherwise Measurements must contain the
 // launch measurement hex from the published R2 allowlist (no embedded catalog).
 //
-// Model Legit: Models is a list of allowed model_commitment values (typically
-// from the sealed-models R2/Pages allowlist), merged with the embedded
-// ModelCatalog (mock entry for unit tests).
+// Model Legit: Models is the published model_commitment allowlist. ModelAttestIssuers
+// are ed25519 pubkey hex values allowed to sign model_commitment_cert.
 //
 // GPU Wiped: GPUPolicyHashes, WipeIssuers (ed25519 pubkey hex), and WipeWorkers
 // (worker binary sha256 commitments) come from published allowlists.
 type VerifyOpts struct {
-	ChallengeHex      string
-	RootsCatalog      map[string]HardwareRoots
-	Measurements      []string
-	MeasurementProofs []MeasurementProof
-	Models            []string
-	GPUPolicyHashes   []string
-	WipeIssuers       []string
-	WipeWorkers       []string
-	AllowDevNoop      bool
+	ChallengeHex        string
+	RootsCatalog        map[string]HardwareRoots
+	Measurements        []string
+	MeasurementProofs   []MeasurementProof
+	Models              []string
+	ModelAttestIssuers  []string
+	GPUPolicyHashes     []string
+	WipeIssuers         []string
+	WipeWorkers         []string
+	AllowDevNoop        bool
 }
 
 func VerifyReceiptJSONOpts(receiptJSON []byte, opts VerifyOpts) ReceiptResult {
@@ -470,16 +467,16 @@ func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, opts VerifyOpts
 	check.Hash = truncateHex(candidate)
 
 	if n := len(opts.MeasurementProofs); n > 0 {
-		slog.Debug("code_legit", "trying sigstore_proof", "proofs", n, "measurement", truncateHex(candidate))
+		slog.Debug("code_legit", "step", "trying_sigstore_proof", "proofs", n, "measurement", truncateHex(candidate))
 		var lastErr error
 		for i, proof := range opts.MeasurementProofs {
 			if err := VerifyCosignBlobBundle(proof.PayloadBytes(), proof.BundleJSON); err != nil {
 				lastErr = err
-				slog.Debug("code_legit", "sigstore_proof", "proof", i, "err", err)
+				slog.Debug("code_legit", "step", "sigstore_proof", "proof", i, "err", err)
 				continue
 			}
 			if MeasurementFromPayload(proof.PayloadBytes()) != candidate {
-				slog.Debug("code_legit", "sigstore_proof", "proof", i, "mismatch_git", truncateHex(proof.GitSHA))
+				slog.Debug("code_legit", "step", "sigstore_proof", "proof", i, "mismatch_git", truncateHex(proof.GitSHA))
 				continue
 			}
 			check.OK = true
@@ -505,7 +502,7 @@ func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, opts VerifyOpts
 		slog.Info("code_legit", "path", check.Source, "ok", false)
 		return check
 	}
-	slog.Debug("code_legit", "trying published_catalog", "catalog_size", len(catalog), "measurement", truncateHex(candidate))
+	slog.Debug("code_legit", "step", "trying_published_catalog", "catalog_size", len(catalog), "measurement", truncateHex(candidate))
 
 	for _, known := range catalog {
 		if candidate == strings.ToLower(strings.TrimSpace(known)) {
@@ -526,16 +523,62 @@ func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, opts VerifyOpts
 func checkModelLegit(pkg map[string]any, opts VerifyOpts) Check {
 	check := Check{
 		ID:    "model_legit",
-		Label: "Model Legit",
+		Label: "Approved Model",
 	}
 
 	commitment, _ := pkg["model_commitment"].(string)
 	check.Hash = truncateHex(stringsTrimPrefix(commitment, "sha256:"))
+	if commitment == "" {
+		check.Detail = "missing model_commitment"
+		return check
+	}
+
+	certRaw, ok := pkg["model_commitment_cert"].(map[string]any)
+	if !ok {
+		check.Detail = "missing model_commitment_cert"
+		return check
+	}
+	cert, err := modelattest.CertFromMap(certRaw)
+	if err != nil {
+		check.Detail = err.Error()
+		return check
+	}
+	if err := modelattest.VerifyCertSignature(cert); err != nil {
+		check.Detail = err.Error()
+		return check
+	}
+	nonceHex, _ := pkg["nonce"].(string)
+	if cert.Nonce == "" || nonceHex == "" || cert.Nonce != nonceHex {
+		check.Detail = "model_commitment_cert.nonce mismatch"
+		return check
+	}
+	if cert.ModelCommitment != commitment {
+		check.Detail = "model_commitment_cert.model_commitment mismatch"
+		return check
+	}
+
+	issuers := EffectiveModelAttestIssuers(opts.ModelAttestIssuers)
+	if len(issuers) == 0 {
+		check.Detail = "model attest issuer allowlist empty"
+		return check
+	}
+	pub := strings.ToLower(strings.TrimSpace(cert.Pubkey))
+	issuerOK := false
+	for _, want := range issuers {
+		if pub == strings.ToLower(strings.TrimSpace(want)) {
+			issuerOK = true
+			break
+		}
+	}
+	if !issuerOK {
+		check.Detail = "model_commitment_cert pubkey not in issuer allowlist"
+		return check
+	}
 
 	for _, catalogHash := range EffectiveModelCommitments(opts.Models) {
 		if commitment == catalogHash {
 			check.OK = true
-			check.Detail = commitment
+			check.Detail = "Model weights match a NexQloud-published model commitment"
 			return check
 		}
 	}

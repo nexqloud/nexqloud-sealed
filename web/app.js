@@ -3,7 +3,7 @@ const CHECK_LABELS = {
   hardware_genuine: 'Real AMD Hardware',
   key_binding: 'Signing Key Bound to Hardware',
   code_legit: 'Approved Enclave Code',
-  model_legit: 'Model Legit',
+  model_legit: 'Approved Model',
   gpu_wiped: 'GPU Wiped',
   freshness: 'Freshness',
   derivation_operator_id: 'Operator ID',
@@ -17,7 +17,7 @@ const CHECK_HINTS = {
   hardware_genuine: 'Attestation came from real AMD SEV-SNP hardware with a valid AMD certificate chain',
   key_binding: 'Signing key is bound into this AMD hardware attestation for this session',
   code_legit: 'Enclave code matches a NexQloud-published build (Sigstore proof or R2 allowlist)',
-  model_legit: 'catalog hash',
+  model_legit: 'Model weights match a NexQloud-published model commitment',
   gpu_wiped: 'policy enforced',
   freshness: 'nonce challenge',
 };
@@ -153,8 +153,8 @@ const RECEIPT_TOPICS = [
     id: 'model_legit',
     checkId: 'model_legit',
     swatchClass: 'model_legit',
-    label: 'Model Legit',
-    description: 'Model commitment hash compared to catalog.',
+    label: 'Approved Model',
+    description: 'Model weights match a NexQloud-published model commitment.',
     fieldHint: 'Look for "model_commitment" inside package.',
     plainEnglish: 'Confirms which AI model produced the result. The model_commitment hash is checked against an allowed model catalog so only approved models pass.',
   },
@@ -942,6 +942,9 @@ function renderCheck(check, challengeHex = '') {
       ? 'Enclave code matches a measurement on the NexQloud published allowlist'
       : 'Enclave code matches a NexQloud-published build with a valid CI transparency-log proof';
   }
+  if (check.id === 'model_legit' && passed) {
+    detail = 'Model weights match a NexQloud-published model commitment';
+  }
 
   li.className = `verify-check ${passed ? 'verify-check--pass' : 'verify-check--fail'}`;
   const label = check.id === 'key_binding'
@@ -950,7 +953,9 @@ function renderCheck(check, challengeHex = '') {
       ? 'Real AMD Hardware'
       : check.id === 'code_legit'
         ? 'Approved Enclave Code'
-        : (check.label || CHECK_LABELS[check.id] || check.id);
+        : check.id === 'model_legit'
+          ? 'Approved Model'
+          : (check.label || CHECK_LABELS[check.id] || check.id);
   li.innerHTML = `
     ${passed ? ICON_PASS : ICON_FAIL}
     <div class="verify-check__body">
@@ -1203,6 +1208,40 @@ async function loadJSONAllowlist(urls) {
   return resp.json();
 }
 
+async function loadModelAttestIssuers() {
+  const envs = ['staging', 'production'];
+  const seen = new Set();
+  const out = [];
+  const tried = [];
+  for (const env of envs) {
+    const urls = [
+      `/sealed-model-attest-issuers/${encodeURIComponent(env)}/allowlist.json`,
+      `/api/model-attest-issuers-allowlist?env=${encodeURIComponent(env)}`,
+      `${R2_PUBLIC_BASE}/${env}/sealed-model-attest-issuers/allowlist.json`,
+    ];
+    tried.push(...urls);
+    let allowlist;
+    try {
+      allowlist = await loadJSONAllowlist(urls);
+    } catch (err) {
+      console.error('[sealed-verify] model attest issuers parse failed', env, err);
+      allowlist = null;
+    }
+    for (const e of allowlist?.entries || []) {
+      const c = (e.pubkey || '').trim().toLowerCase();
+      if (!c || c.startsWith('replace_') || seen.has(c)) continue;
+      seen.add(c);
+      out.push(c);
+    }
+  }
+  if (out.length === 0) {
+    throw new Error(
+      `Model attest issuer allowlist returned no pubkeys. Tried:\n${tried.join('\n')}`,
+    );
+  }
+  return out;
+}
+
 async function loadGPUWipeVerifyOpts() {
   const envs = ['staging', 'production'];
   const policyHashes = [];
@@ -1283,9 +1322,10 @@ async function runWasmVerify(receiptJSON) {
   const challenge = document.getElementById('challenge-input').value.trim();
   setStatus('Fetching Sigstore proof and allowlists…');
   const measurement = extractReceiptMeasurement(receiptJSON);
-  const [proof, models, gpuOpts] = await Promise.all([
+  const [proof, models, modelAttestIssuers, gpuOpts] = await Promise.all([
     measurement ? loadMeasurementProof(measurement) : Promise.resolve(null),
     loadModelCommitments(),
+    loadModelAttestIssuers(),
     loadGPUWipeVerifyOpts(),
   ]);
   let measurements = [];
@@ -1295,6 +1335,7 @@ async function runWasmVerify(receiptJSON) {
   const opts = {
     ...(proof ? { proofs: [proof] } : { measurements }),
     models,
+    model_attest_issuers: modelAttestIssuers,
     ...gpuOpts,
   };
   const resultJSON = globalThis.verifyReceipt(

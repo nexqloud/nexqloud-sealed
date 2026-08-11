@@ -1,0 +1,12 @@
+{
+  "schema": "nexqloud-sealed-model-attest-issuers-allowlist/1",
+  "environment": "staging",
+  "entries": [
+    {
+      "id": "nexqloud-model-attest",
+      "issuer": "nexqloud-model-attest",
+      "pubkey": "53bb52f03f57395e836a7c0851b4b3a7dd84a0f38e62bfcdf5d6a555f8152827",
+      "note": "Rotate with scripts/gen-model-attest-issuer.sh before first production deploy; never commit MODEL_ATTEST_ISSUER_PRIVKEY"
+    }
+  ]
+}

@@ -8,8 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,13 +15,13 @@ import (
 	"nexqloud-sealed/internal/devmode"
 	"nexqloud-sealed/internal/enclave"
 	"nexqloud-sealed/internal/gpu"
+	"nexqloud-sealed/internal/modelattest"
 	"nexqloud-sealed/internal/tlog"
 )
 
 const (
 	schemaVersion      = "sealed-receipt/1"
 	placeholderMeasure = "41f77fe5c1416343f84dbeeded504eb4a2c450861317ed3e4e46cd771c794243a4cbeb3d75ec663e6a7a47bd1f4fab503"
-	dummyModelCommit   = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 	dummyIdentityClaim = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 )
 
@@ -78,7 +76,7 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		identityHash = dummyIdentityClaim
 	}
 
-	modelCommit, err := resolveModelCommitment()
+	modelCommit, modelCert, err := resolveModelCommitment(nonceHex)
 	if err != nil {
 		return nil, err
 	}
@@ -89,17 +87,18 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 	}
 
 	pkg := Package{
-		Schema:             schemaVersion,
-		ReceiptID:          uuid.NewString(),
-		Timestamp:          time.Now().UTC().Format(time.RFC3339),
-		PromptHash:         digest(in.Prompt),
-		ResponseHash:       digest(in.Response),
-		ModelCommitment:    modelCommit,
-		EnclaveMeasurement: measurement,
-		GPUPolicyHash:      policyHash,
-		ZeroizationCert:    zeroCert,
-		IdentityClaimHash:  identityHash,
-		Nonce:              nonceHex,
+		Schema:              schemaVersion,
+		ReceiptID:           uuid.NewString(),
+		Timestamp:           time.Now().UTC().Format(time.RFC3339),
+		PromptHash:          digest(in.Prompt),
+		ResponseHash:        digest(in.Response),
+		ModelCommitment:     modelCommit,
+		ModelCommitmentCert: modelCert,
+		EnclaveMeasurement:  measurement,
+		GPUPolicyHash:       policyHash,
+		ZeroizationCert:     zeroCert,
+		IdentityClaimHash:   identityHash,
+		Nonce:               nonceHex,
 	}
 
 	pkgMap, err := packageMap(pkg)
@@ -154,12 +153,6 @@ func digest(value string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func resolveModelCommitment() (string, error) {
-	if v := strings.TrimSpace(os.Getenv("NEXQLOUD_MODEL_COMMIT")); v != "" {
-		return v, nil
-	}
-	if devmode.Enabled() {
-		return dummyModelCommit, nil
-	}
-	return "", fmt.Errorf("NEXQLOUD_MODEL_COMMIT is required in production")
+func resolveModelCommitment(nonceHex string) (string, map[string]any, error) {
+	return modelattest.RequestCommitment(nonceHex)
 }

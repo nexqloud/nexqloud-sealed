@@ -78,13 +78,14 @@ func applyVerifyOptsJSON(opts *verify.VerifyOpts, raw string) error {
 	}
 
 	var wire struct {
-		Measurements    []string                  `json:"measurements"`
-		Proofs          []verify.MeasurementProof `json:"proofs"`
-		Models          []string                  `json:"models"`
-		GPUPolicyHashes []string                  `json:"gpu_policy_hashes"`
-		WipeIssuers     []string                  `json:"wipe_issuers"`
-		WipeWorkers     []string                  `json:"wipe_workers"`
-		AllowDevNoop    bool                      `json:"allow_dev_noop"`
+		Measurements       []string                  `json:"measurements"`
+		Proofs             []verify.MeasurementProof `json:"proofs"`
+		Models             []string                  `json:"models"`
+		ModelAttestIssuers []string                  `json:"model_attest_issuers"`
+		GPUPolicyHashes    []string                  `json:"gpu_policy_hashes"`
+		WipeIssuers        []string                  `json:"wipe_issuers"`
+		WipeWorkers        []string                  `json:"wipe_workers"`
+		AllowDevNoop       bool                      `json:"allow_dev_noop"`
 	}
 	if err := json.Unmarshal([]byte(raw), &wire); err != nil {
 		return fmt.Errorf("parse verify opts JSON: %w", err)
@@ -92,6 +93,7 @@ func applyVerifyOptsJSON(opts *verify.VerifyOpts, raw string) error {
 	opts.Measurements = wire.Measurements
 	opts.MeasurementProofs = wire.Proofs
 	opts.Models = wire.Models
+	opts.ModelAttestIssuers = wire.ModelAttestIssuers
 	opts.GPUPolicyHashes = wire.GPUPolicyHashes
 	opts.WipeIssuers = wire.WipeIssuers
 	opts.WipeWorkers = wire.WipeWorkers

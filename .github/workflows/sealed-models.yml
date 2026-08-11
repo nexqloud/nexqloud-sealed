@@ -1,12 +1,15 @@
 name: sealed-models
 
-# Hash the pinned HF GGUF and publish sealed-models allowlist to R2
-# (same bucket/secrets as sealed-initrd). No manual upload step.
+# Catalog-driven: hash every model in web/sealed-models/catalog.yaml, upload
+# GGUF blobs + meta + full allowlist + model-attest issuer keys to R2.
 #
 # R2 layout:
 #   {staging|production}/sealed-models/allowlist.json
+#   {staging|production}/sealed-models/<id>/model.gguf
 #   {staging|production}/sealed-models/<id>/expected-model-commitment.txt
 #   {staging|production}/sealed-models/<id>/model-meta.json
+#   {staging|production}/sealed-models/by-sha256/<hex>.gguf
+#   {staging|production}/sealed-model-attest-issuers/allowlist.json
 #   {staging|production}/sealed-models/latest/release.json
 
 on:
@@ -15,7 +18,9 @@ on:
     branches: [stage, main]
     paths:
       - "web/sealed-models/**"
+      - "web/sealed-model-attest-issuers/**"
       - "scripts/hash-hf-gguf.sh"
+      - "scripts/hash-catalog-models.sh"
       - "scripts/upload-models-r2.sh"
       - ".github/workflows/sealed-models.yml"
 
@@ -29,7 +34,7 @@ env:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 180
     environment: ${{ github.ref == 'refs/heads/stage' && 'staging' || 'production' }}
     steps:
       - name: Checkout
@@ -59,33 +64,19 @@ jobs:
           sudo /tmp/aws/install --update
           aws --version
 
-      - name: Hash pinned HF GGUF
+      - name: Hash catalog GGUFs
         run: |
           set -euo pipefail
-          chmod +x scripts/hash-hf-gguf.sh scripts/upload-models-r2.sh
-          MODEL_ID=qwen-0.5b OUT_DIR="$(pwd)/out/sealed-models/qwen-0.5b" \
-            ./scripts/hash-hf-gguf.sh
-          echo "commitment=$(tr -d '\n' < out/sealed-models/qwen-0.5b/expected-model-commitment.txt)"
-
-      - name: Check committed allowlist matches hashed GGUF
-        run: |
-          set -euo pipefail
-          ENV_NAME="${{ steps.env.outputs.name }}"
-          GOT=$(tr -d '\n' < out/sealed-models/qwen-0.5b/expected-model-commitment.txt)
-          WANT=$(tr -d '\n' < "web/sealed-models/${ENV_NAME}/qwen-0.5b/expected-model-commitment.txt")
-          if [[ "${GOT}" != "${WANT}" ]]; then
-            echo "Hashed GGUF commitment differs from committed Pages pin." >&2
-            echo "  hashed:    ${GOT}" >&2
-            echo "  committed: ${WANT}" >&2
-            echo "Update web/sealed-models/${ENV_NAME}/ after changing HF pin in scripts/hash-hf-gguf.sh" >&2
-            exit 1
-          fi
-          echo "OK: commitment matches web/sealed-models/${ENV_NAME}/qwen-0.5b/"
+          chmod +x scripts/hash-hf-gguf.sh scripts/hash-catalog-models.sh scripts/upload-models-r2.sh
+          pip3 install --user pyyaml
+          OUT_ROOT="$(pwd)/out/sealed-models" ./scripts/hash-catalog-models.sh
+          echo "Hashed:"
+          find out/sealed-models -name expected-model-commitment.txt -print -exec cat {} \;
 
       - name: Publish to R2
         env:
           ENV_NAME: ${{ steps.env.outputs.name }}
-          MODEL_DIR: ${{ github.workspace }}/out/sealed-models/qwen-0.5b
+          MODELS_ROOT: ${{ github.workspace }}/out/sealed-models
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -98,4 +89,4 @@ jobs:
           fi
           ./scripts/upload-models-r2.sh
           echo "Published ${ENV_NAME}/sealed-models/allowlist.json"
-          cat "${MODEL_DIR}/r2-publish.txt"
+          cat "${MODELS_ROOT}/r2-publish.txt"

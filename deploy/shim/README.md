@@ -24,8 +24,13 @@ nerdctl run -d --name sealed-shim \
   -p 8080:8080 \
   -e NEXQLOUD_JWKS_URL=... \
   -e VLLM_URL=... \
+  -e NEXQLOUD_MODEL_ATTEST_URL=http://host.containers.internal:19002 \
   sealed-shim:local
 ```
+
+Production Model Legit requires `NEXQLOUD_MODEL_ATTEST_URL` pointing at
+`deploy/model-attest` (same GGUF as llama). Do not set `NEXQLOUD_MODEL_COMMIT`
+except under `NEXQLOUD_DEV=1`.
 
 ## Trust tiers (CI)
 

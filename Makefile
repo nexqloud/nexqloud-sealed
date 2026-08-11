@@ -1,9 +1,10 @@
-.PHONY: all wasm wasm_exec clean prod demo image-shim
+.PHONY: all wasm wasm_exec clean prod demo image-shim image-model-attest
 
 GO_ROOT := $(shell go env GOROOT)
 SHIM_IMAGE ?= sealed-shim:local
+MODEL_ATTEST_IMAGE ?= sealed-model-attest:local
 
-PROD_BINS := shim operator destruction-coordinator destruction-aggregator verify sealed-verify-deletion
+PROD_BINS := shim operator destruction-coordinator destruction-aggregator verify sealed-verify-deletion model-attest
 DEMO_BINS := registry mock-idp bootstrap
 
 all: wasm wasm_exec
@@ -49,6 +50,9 @@ clean:
 
 image-shim:
 	docker build -t "$(SHIM_IMAGE)" -f deploy/shim/Dockerfile .
+
+image-model-attest:
+	docker build -t "$(MODEL_ATTEST_IMAGE)" -f deploy/model-attest/Dockerfile .
 
 update-and-run:
 	git pull && NEXQLOUD_DEV=1 go run ./cmd/shim/main.go --dev

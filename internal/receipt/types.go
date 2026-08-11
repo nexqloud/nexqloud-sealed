@@ -14,17 +14,18 @@ const (
 )
 
 type Package struct {
-	Schema             string         `json:"schema"`
-	ReceiptID          string         `json:"receipt_id"`
-	Timestamp          string         `json:"timestamp"`
-	PromptHash         string         `json:"prompt_hash"`
-	ResponseHash       string         `json:"response_hash"`
-	ModelCommitment    string         `json:"model_commitment"`
-	EnclaveMeasurement string         `json:"enclave_measurement"`
-	GPUPolicyHash      string         `json:"gpu_policy_hash"`
-	ZeroizationCert    map[string]any `json:"zeroization_cert"`
-	IdentityClaimHash  string         `json:"identity_claim_hash"`
-	Nonce              string         `json:"nonce"`
+	Schema               string         `json:"schema"`
+	ReceiptID            string         `json:"receipt_id"`
+	Timestamp            string         `json:"timestamp"`
+	PromptHash           string         `json:"prompt_hash"`
+	ResponseHash         string         `json:"response_hash"`
+	ModelCommitment      string         `json:"model_commitment"`
+	ModelCommitmentCert  map[string]any `json:"model_commitment_cert,omitempty"`
+	EnclaveMeasurement   string         `json:"enclave_measurement"`
+	GPUPolicyHash        string         `json:"gpu_policy_hash"`
+	ZeroizationCert      map[string]any `json:"zeroization_cert"`
+	IdentityClaimHash    string         `json:"identity_claim_hash"`
+	Nonce                string         `json:"nonce"`
 }
 
 type CertificateChain struct {

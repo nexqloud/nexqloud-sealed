@@ -101,10 +101,16 @@ func main() {
 		}
 
 		if models, err := pkgverify.FetchAllowlistModelCommitments(*r2Base, envs); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: fetch model allowlist: %v (using embedded catalog only)\n", err)
+			fmt.Fprintf(os.Stderr, "warning: fetch model allowlist: %v\n", err)
 		} else if len(models) > 0 {
 			opts.Models = models
 			fmt.Fprintf(os.Stderr, "loaded %d model commitment(s) from R2\n", len(models))
+		}
+		if issuers, err := pkgverify.FetchAllowlistModelAttestIssuers(*r2Base, envs); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: fetch model-attest issuer allowlist: %v\n", err)
+		} else if len(issuers) > 0 {
+			opts.ModelAttestIssuers = issuers
+			fmt.Fprintf(os.Stderr, "loaded %d model-attest issuer(s) from R2\n", len(issuers))
 		}
 
 		if hashes, err := pkgverify.FetchAllowlistGPUPolicyHashes(*r2Base, envs); err != nil {

@@ -1,0 +1,118 @@
+name: sealed-model-attest image
+
+on:
+  push:
+    branches: [main, stage]
+    tags: ["v*"]
+    paths:
+      - "cmd/model-attest/**"
+      - "internal/modelattest/**"
+      - "internal/signedclaim/**"
+      - "deploy/model-attest/**"
+      - "go.mod"
+      - "go.sum"
+      - ".dockerignore"
+      - ".github/workflows/model-attest-image.yml"
+  pull_request:
+    branches: [main, stage]
+    paths:
+      - "cmd/model-attest/**"
+      - "internal/modelattest/**"
+      - "internal/signedclaim/**"
+      - "deploy/model-attest/**"
+      - "go.mod"
+      - "go.sum"
+      - ".dockerignore"
+      - ".github/workflows/model-attest-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}/sealed-model-attest
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/stage' && 'staging' || github.event_name == 'pull_request' && 'preview' || 'production' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve deploy environment
+        id: env
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF}" in
+            refs/heads/stage)
+              echo "name=staging" >> "$GITHUB_OUTPUT"
+              ;;
+            refs/heads/main|refs/tags/v*)
+              echo "name=production" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "name=preview" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          labels: |
+            org.opencontainers.image.title=sealed-model-attest
+            nexqloud.deploy.environment=${{ steps.env.outputs.name }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=stage,enable=${{ github.ref == 'refs/heads/stage' }}
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/model-attest/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image digest (keyless → Rekor)
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DIGEST}" ]; then
+            echo "missing image digest from build-push" >&2
+            exit 1
+          fi
+          echo "Signing ${IMAGE_NAME}@${DIGEST} for ${{ steps.env.outputs.name }}"
+          cosign sign --yes "${IMAGE_NAME}@${DIGEST}"

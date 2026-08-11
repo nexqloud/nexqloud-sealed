@@ -54,26 +54,8 @@ func FindModelCommitment(a ModelsAllowlist, modelID string) (string, bool) {
 	return "", false
 }
 
-// EffectiveModelCommitments merges opts Models first, then embedded ModelCatalog values.
+// EffectiveModelCommitments returns published model commitments only.
+// There is no embedded production catalog; tests pass commitments explicitly.
 func EffectiveModelCommitments(published []string) []string {
-	seen := make(map[string]struct{}, len(published)+len(ModelCatalog))
-	out := make([]string, 0, len(published)+len(ModelCatalog))
-	add := func(c string) {
-		c = strings.TrimSpace(c)
-		if c == "" {
-			return
-		}
-		if _, ok := seen[c]; ok {
-			return
-		}
-		seen[c] = struct{}{}
-		out = append(out, c)
-	}
-	for _, c := range published {
-		add(c)
-	}
-	for _, c := range ModelCatalog {
-		add(c)
-	}
-	return out
+	return MergeMeasurements(published, nil)
 }
