@@ -2,7 +2,7 @@ const CHECK_LABELS = {
   signature_valid: 'Signature Valid',
   hardware_genuine: 'Real AMD Hardware',
   key_binding: 'Signing Key Bound to Hardware',
-  code_legit: 'Code Legit',
+  code_legit: 'Approved Enclave Code',
   model_legit: 'Model Legit',
   gpu_wiped: 'GPU Wiped',
   freshness: 'Freshness',
@@ -16,7 +16,7 @@ const CHECK_HINTS = {
   signature_valid: 'Receipt package is intact and signed by the enclave key',
   hardware_genuine: 'Attestation came from real AMD SEV-SNP hardware with a valid AMD certificate chain',
   key_binding: 'Signing key is bound into this AMD hardware attestation for this session',
-  code_legit: 'measurement',
+  code_legit: 'Enclave code matches a NexQloud-published build with a valid CI transparency-log proof',
   model_legit: 'catalog hash',
   gpu_wiped: 'policy enforced',
   freshness: 'nonce challenge',
@@ -144,8 +144,8 @@ const RECEIPT_TOPICS = [
     id: 'code_legit',
     checkId: 'code_legit',
     swatchClass: 'code_legit',
-    label: 'Code Legit',
-    description: 'Enclave measurement compared to verifier allowlist.',
+    label: 'Approved Enclave Code',
+    description: 'Enclave code matches a NexQloud-published build with a valid CI transparency-log proof.',
     fieldHint: 'Look for "enclave_measurement" inside package.',
     plainEnglish: 'Confirms the guest launch measurement (AMD SNP MEASUREMENT) has a NexQloud CI Sigstore proof: the measurement was signed by the sealed-initrd GitHub Actions workflow and recorded in Rekor. Package enclave_measurement must agree with the report when both are present.',
   },
@@ -937,13 +937,18 @@ function renderCheck(check, challengeHex = '') {
   if (check.id === 'key_binding' && passed) {
     detail = 'Signing key is bound into this AMD hardware attestation for this session';
   }
+  if (check.id === 'code_legit' && passed) {
+    detail = 'Enclave code matches a NexQloud-published build with a valid CI transparency-log proof';
+  }
 
   li.className = `verify-check ${passed ? 'verify-check--pass' : 'verify-check--fail'}`;
   const label = check.id === 'key_binding'
     ? 'Signing Key Bound to Hardware'
     : check.id === 'hardware_genuine'
       ? 'Real AMD Hardware'
-      : (check.label || CHECK_LABELS[check.id] || check.id);
+      : check.id === 'code_legit'
+        ? 'Approved Enclave Code'
+        : (check.label || CHECK_LABELS[check.id] || check.id);
   li.innerHTML = `
     ${passed ? ICON_PASS : ICON_FAIL}
     <div class="verify-check__body">
@@ -1260,8 +1265,6 @@ async function runWasmVerify(receiptJSON) {
     loadModelCommitments(),
     loadGPUWipeVerifyOpts(),
   ]);
-  console.info('[sealed-verify] model commitments loaded', models.length, models);
-  console.info('[sealed-verify] gpu wipe opts', gpuOpts);
   const opts = {
     ...(proof ? { proofs: [proof] } : { measurements: [] }),
     models,

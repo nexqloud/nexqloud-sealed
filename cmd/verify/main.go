@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -15,6 +16,8 @@ import (
 )
 
 func main() {
+	setupSlog()
+
 	challenge := flag.String("challenge", "", "expected freshness nonce (hex)")
 	askPath := flag.String("ask", "", "path to AMD ASK root certificate (DER)")
 	arkPath := flag.String("ark", "", "path to AMD ARK root certificate (DER)")
@@ -181,6 +184,19 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func setupSlog() {
+	level := slog.LevelInfo
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("NEXQLOUD_LOG_LEVEL"))) {
+	case "debug", "dbg":
+		level = slog.LevelDebug
+	case "warn", "warning":
+		level = slog.LevelWarn
+	case "error", "err":
+		level = slog.LevelError
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
 
 func inferProductLine(receiptJSON []byte) (string, error) {

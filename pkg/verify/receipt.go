@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -45,6 +46,9 @@ type Check struct {
 	Detail         string `json:"detail"`
 	Hash           string `json:"hash,omitempty"`
 	ChainValidated bool   `json:"chain_validated,omitempty"`
+	// Source is a debug hint for which verification path produced this check
+	// (e.g. code_legit: "sigstore_proof", "published_catalog", "embedded_catalog").
+	Source string `json:"source,omitempty"`
 }
 
 type ReceiptResult struct {
@@ -449,7 +453,7 @@ func enclaveKeyHash(pub ed25519.PublicKey, nonce []byte) [64]byte {
 func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, opts VerifyOpts) Check {
 	check := Check{
 		ID:    "code_legit",
-		Label: "Code Legit",
+		Label: "Approved Enclave Code",
 	}
 
 	pkgMeas, _ := pkg["enclave_measurement"].(string)
@@ -462,6 +466,8 @@ func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, opts VerifyOpts
 	if reportMeas != "" && pkgMeas != "" && reportMeas != pkgMeas {
 		check.Hash = truncateHex(reportMeas)
 		check.Detail = "package enclave_measurement != attestation MEASUREMENT"
+		check.Source = "mismatch"
+		slog.Debug("code_legit", "path", "mismatch", "package", truncateHex(pkgMeas), "report", truncateHex(reportMeas))
 		return check
 	}
 
@@ -471,31 +477,29 @@ func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, opts VerifyOpts
 	}
 	if candidate == "" {
 		check.Detail = "missing launch measurement"
+		check.Source = "missing"
+		slog.Debug("code_legit", "path", "missing")
 		return check
 	}
 	check.Hash = truncateHex(candidate)
 
-	src := "attestation"
-	if reportMeas == "" {
-		src = "package"
-	}
-
-	if len(opts.MeasurementProofs) > 0 {
+	if n := len(opts.MeasurementProofs); n > 0 {
+		slog.Debug("code_legit", "path", "sigstore_proof", "proofs", n, "measurement", truncateHex(candidate))
 		var lastErr error
-		for _, proof := range opts.MeasurementProofs {
+		for i, proof := range opts.MeasurementProofs {
 			if err := VerifyCosignBlobBundle(proof.PayloadBytes(), proof.BundleJSON); err != nil {
 				lastErr = err
+				slog.Debug("code_legit", "path", "sigstore_proof", "proof", i, "err", err)
 				continue
 			}
 			if MeasurementFromPayload(proof.PayloadBytes()) != candidate {
+				slog.Debug("code_legit", "path", "sigstore_proof", "proof", i, "mismatch_git", truncateHex(proof.GitSHA))
 				continue
 			}
 			check.OK = true
-			detail := src + " measurement has valid Sigstore proof: " + truncateHex(candidate)
-			if proof.GitSHA != "" {
-				detail += " (git " + truncateHex(proof.GitSHA) + ")"
-			}
-			check.Detail = detail
+			check.Source = "sigstore_proof"
+			check.Detail = "Enclave code matches a NexQloud-published build with a valid CI transparency-log proof"
+			slog.Debug("code_legit", "path", "sigstore_proof", "ok", true, "git", truncateHex(proof.GitSHA), "env", proof.Environment, "measurement", truncateHex(candidate))
 			return check
 		}
 		if lastErr != nil {
@@ -503,19 +507,32 @@ func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, opts VerifyOpts
 		} else {
 			check.Detail = "no Sigstore proof matched launch measurement"
 		}
+		check.Source = "sigstore_proof"
+		slog.Debug("code_legit", "path", "sigstore_proof", "ok", false, "detail", check.Detail)
 		return check
 	}
 
+	published := len(opts.Measurements) > 0
 	catalog := EffectiveMeasurements(opts.Measurements)
+	path := "embedded_catalog"
+	if published {
+		path = "published_catalog"
+	}
+	slog.Debug("code_legit", "path", path, "catalog_size", len(catalog), "published_opts", len(opts.Measurements), "measurement", truncateHex(candidate))
+
 	for _, known := range catalog {
 		if candidate == strings.ToLower(strings.TrimSpace(known)) {
 			check.OK = true
-			check.Detail = src + " measurement in published catalog: " + truncateHex(candidate)
+			check.Source = path
+			check.Detail = "Enclave code matches a NexQloud-published build with a valid CI transparency-log proof"
+			slog.Debug("code_legit", "path", path, "ok", true)
 			return check
 		}
 	}
 
+	check.Source = path
 	check.Detail = "launch measurement not in published catalog"
+	slog.Debug("code_legit", "path", path, "ok", false)
 	return check
 }
 
