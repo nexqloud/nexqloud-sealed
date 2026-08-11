@@ -16,7 +16,7 @@ const CHECK_HINTS = {
   signature_valid: 'Receipt package is intact and signed by the enclave key',
   hardware_genuine: 'Attestation came from real AMD SEV-SNP hardware with a valid AMD certificate chain',
   key_binding: 'Signing key is bound into this AMD hardware attestation for this session',
-  code_legit: 'Enclave code matches a NexQloud-published build with a valid CI transparency-log proof',
+  code_legit: 'Enclave code matches a NexQloud-published build (Sigstore proof or R2 allowlist)',
   model_legit: 'catalog hash',
   gpu_wiped: 'policy enforced',
   freshness: 'nonce challenge',
@@ -938,7 +938,9 @@ function renderCheck(check, challengeHex = '') {
     detail = 'Signing key is bound into this AMD hardware attestation for this session';
   }
   if (check.id === 'code_legit' && passed) {
-    detail = 'Enclave code matches a NexQloud-published build with a valid CI transparency-log proof';
+    detail = check.source === 'published_catalog'
+      ? 'Enclave code matches a measurement on the NexQloud published allowlist'
+      : 'Enclave code matches a NexQloud-published build with a valid CI transparency-log proof';
   }
 
   li.className = `verify-check ${passed ? 'verify-check--pass' : 'verify-check--fail'}`;
@@ -1058,6 +1060,27 @@ async function loadAllowlist(env) {
   ]);
   if (!resp) return null;
   return resp.json();
+}
+
+async function loadAllowlistMeasurements() {
+  const envs = ['staging', 'production'];
+  const seen = new Set();
+  const out = [];
+  for (const env of envs) {
+    let allowlist;
+    try {
+      allowlist = await loadAllowlist(env);
+    } catch {
+      allowlist = null;
+    }
+    for (const e of allowlist?.entries || []) {
+      const m = (e.measurement || '').toLowerCase().trim();
+      if (!m || seen.has(m)) continue;
+      seen.add(m);
+      out.push(m);
+    }
+  }
+  return out;
 }
 
 async function loadObjectText(key) {
@@ -1265,8 +1288,12 @@ async function runWasmVerify(receiptJSON) {
     loadModelCommitments(),
     loadGPUWipeVerifyOpts(),
   ]);
+  let measurements = [];
+  if (!proof) {
+    measurements = await loadAllowlistMeasurements();
+  }
   const opts = {
-    ...(proof ? { proofs: [proof] } : { measurements: [] }),
+    ...(proof ? { proofs: [proof] } : { measurements }),
     models,
     ...gpuOpts,
   };

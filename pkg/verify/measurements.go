@@ -73,11 +73,8 @@ func MergeMeasurements(extras, fallback []string) []string {
 	return out
 }
 
-// EffectiveMeasurements returns published measurements when provided, otherwise
-// the embedded MeasurementCatalog.
+// EffectiveMeasurements returns the published allowlist measurements only.
+// There is no embedded/hardcoded measurement catalog.
 func EffectiveMeasurements(published []string) []string {
-	if len(published) == 0 {
-		return append([]string(nil), MeasurementCatalog...)
-	}
-	return MergeMeasurements(published, MeasurementCatalog)
+	return MergeMeasurements(published, nil)
 }

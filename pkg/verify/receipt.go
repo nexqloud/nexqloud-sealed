@@ -21,20 +21,6 @@ import (
 	iv "nexqloud-sealed/internal/verify"
 )
 
-const (
-	// Legacy fixture measurement (pre-Option A / pre-live Kata match).
-	KnownEnclaveMeasurement = "41f77fe5c1416343f84dbeeded504eb4a2c450861317ed3e4e46cd771c79243a4cbeb3d75ec663e6a7a47bd1f4fab503"
-	// Live kata-qemu-snp on EPYC-v4 + confidential guest image (NXQR9TMNE).
-	KataImageMeasurementEPYCv4 = "1af6826c5e0574dcbc8f940f5028f590104eba26b8627e90df0243dde111268c2c63dc0b1cfaa027115f7a13b4d316da"
-)
-
-// MeasurementCatalog is the embedded fallback allowlist for Code Legit when no
-// Sigstore MeasurementProofs are supplied (offline / fixture use).
-var MeasurementCatalog = []string{
-	KataImageMeasurementEPYCv4,
-	KnownEnclaveMeasurement,
-}
-
 var ModelCatalog = map[string]string{
 	"mock-model": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 }
@@ -47,7 +33,7 @@ type Check struct {
 	Hash           string `json:"hash,omitempty"`
 	ChainValidated bool   `json:"chain_validated,omitempty"`
 	// Source is a debug hint for which verification path produced this check
-	// (e.g. code_legit: "sigstore_proof", "published_catalog", "embedded_catalog").
+	// (e.g. code_legit: "sigstore_proof", "published_catalog").
 	Source string `json:"source,omitempty"`
 }
 
@@ -82,8 +68,8 @@ func VerifyReceiptJSON(receiptJSON []byte, challengeHex string, rootsCatalog map
 //
 // Code Legit (Pattern 1): when MeasurementProofs is non-empty, the launch
 // measurement must match a proof whose cosign/Sigstore bundle verifies under
-// the sealed-initrd workflow identity. Otherwise Measurements (merged with the
-// embedded catalog) is used as a hex allowlist fallback.
+// the sealed-initrd workflow identity. Otherwise Measurements must contain the
+// launch measurement hex from the published R2 allowlist (no embedded catalog).
 //
 // Model Legit: Models is a list of allowed model_commitment values (typically
 // from the sealed-models R2/Pages allowlist), merged with the embedded
@@ -467,7 +453,7 @@ func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, opts VerifyOpts
 		check.Hash = truncateHex(reportMeas)
 		check.Detail = "package enclave_measurement != attestation MEASUREMENT"
 		check.Source = "mismatch"
-		slog.Debug("code_legit", "path", "mismatch", "package", truncateHex(pkgMeas), "report", truncateHex(reportMeas))
+		slog.Info("code_legit", "path", check.Source, "ok", false)
 		return check
 	}
 
@@ -478,28 +464,28 @@ func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, opts VerifyOpts
 	if candidate == "" {
 		check.Detail = "missing launch measurement"
 		check.Source = "missing"
-		slog.Debug("code_legit", "path", "missing")
+		slog.Info("code_legit", "path", check.Source, "ok", false)
 		return check
 	}
 	check.Hash = truncateHex(candidate)
 
 	if n := len(opts.MeasurementProofs); n > 0 {
-		slog.Debug("code_legit", "path", "sigstore_proof", "proofs", n, "measurement", truncateHex(candidate))
+		slog.Debug("code_legit", "trying sigstore_proof", "proofs", n, "measurement", truncateHex(candidate))
 		var lastErr error
 		for i, proof := range opts.MeasurementProofs {
 			if err := VerifyCosignBlobBundle(proof.PayloadBytes(), proof.BundleJSON); err != nil {
 				lastErr = err
-				slog.Debug("code_legit", "path", "sigstore_proof", "proof", i, "err", err)
+				slog.Debug("code_legit", "sigstore_proof", "proof", i, "err", err)
 				continue
 			}
 			if MeasurementFromPayload(proof.PayloadBytes()) != candidate {
-				slog.Debug("code_legit", "path", "sigstore_proof", "proof", i, "mismatch_git", truncateHex(proof.GitSHA))
+				slog.Debug("code_legit", "sigstore_proof", "proof", i, "mismatch_git", truncateHex(proof.GitSHA))
 				continue
 			}
 			check.OK = true
 			check.Source = "sigstore_proof"
 			check.Detail = "Enclave code matches a NexQloud-published build with a valid CI transparency-log proof"
-			slog.Debug("code_legit", "path", "sigstore_proof", "ok", true, "git", truncateHex(proof.GitSHA), "env", proof.Environment, "measurement", truncateHex(candidate))
+			slog.Info("code_legit", "path", check.Source, "ok", true, "git", truncateHex(proof.GitSHA), "env", proof.Environment)
 			return check
 		}
 		if lastErr != nil {
@@ -508,31 +494,32 @@ func checkCodeLegit(pkg map[string]any, att *sevsnp.Attestation, opts VerifyOpts
 			check.Detail = "no Sigstore proof matched launch measurement"
 		}
 		check.Source = "sigstore_proof"
-		slog.Debug("code_legit", "path", "sigstore_proof", "ok", false, "detail", check.Detail)
+		slog.Info("code_legit", "path", check.Source, "ok", false)
 		return check
 	}
 
-	published := len(opts.Measurements) > 0
 	catalog := EffectiveMeasurements(opts.Measurements)
-	path := "embedded_catalog"
-	if published {
-		path = "published_catalog"
+	if len(catalog) == 0 {
+		check.Source = "missing_allowlist"
+		check.Detail = "no Sigstore proof or published allowlist for launch measurement"
+		slog.Info("code_legit", "path", check.Source, "ok", false)
+		return check
 	}
-	slog.Debug("code_legit", "path", path, "catalog_size", len(catalog), "published_opts", len(opts.Measurements), "measurement", truncateHex(candidate))
+	slog.Debug("code_legit", "trying published_catalog", "catalog_size", len(catalog), "measurement", truncateHex(candidate))
 
 	for _, known := range catalog {
 		if candidate == strings.ToLower(strings.TrimSpace(known)) {
 			check.OK = true
-			check.Source = path
-			check.Detail = "Enclave code matches a NexQloud-published build with a valid CI transparency-log proof"
-			slog.Debug("code_legit", "path", path, "ok", true)
+			check.Source = "published_catalog"
+			check.Detail = "Enclave code matches a measurement on the NexQloud published allowlist"
+			slog.Info("code_legit", "path", check.Source, "ok", true)
 			return check
 		}
 	}
 
-	check.Source = path
-	check.Detail = "launch measurement not in published catalog"
-	slog.Debug("code_legit", "path", path, "ok", false)
+	check.Source = "published_catalog"
+	check.Detail = "launch measurement not on published allowlist"
+	slog.Info("code_legit", "path", check.Source, "ok", false)
 	return check
 }
 

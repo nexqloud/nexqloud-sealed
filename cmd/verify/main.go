@@ -83,7 +83,7 @@ func main() {
 		if meas != "" {
 			proof, err := pkgverify.FetchProofForMeasurement(*r2Base, envs, meas)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: fetch Sigstore proof: %v (falling back to allowlist hex / embedded catalog)\n", err)
+				fmt.Fprintf(os.Stderr, "warning: fetch Sigstore proof: %v (falling back to R2 allowlist hex)\n", err)
 				if hexes, herr := pkgverify.FetchAllowlistMeasurements(*r2Base, envs); herr == nil && len(hexes) > 0 {
 					opts.Measurements = hexes
 					fmt.Fprintf(os.Stderr, "loaded %d allowlist measurement(s) from R2\n", len(hexes))
@@ -94,7 +94,7 @@ func main() {
 					meas[:16], truncate(proof.GitSHA, 12), proof.Environment)
 			}
 		} else if hexes, err := pkgverify.FetchAllowlistMeasurements(*r2Base, envs); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: fetch allowlist: %v (using embedded catalog only)\n", err)
+			fmt.Fprintf(os.Stderr, "warning: fetch allowlist: %v\n", err)
 		} else if len(hexes) > 0 {
 			opts.Measurements = hexes
 			fmt.Fprintf(os.Stderr, "loaded %d allowlist measurement(s) from R2\n", len(hexes))

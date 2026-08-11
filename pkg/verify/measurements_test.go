@@ -24,14 +24,11 @@ func TestParseInitrdRelease(t *testing.T) {
 func TestEffectiveMeasurements(t *testing.T) {
 	pub := []string{"aa", "bb", "aa"}
 	got := EffectiveMeasurements(pub)
-	if len(got) < 2 {
-		t.Fatalf("expected merged catalog, got %#v", got)
+	if len(got) != 2 || got[0] != "aa" || got[1] != "bb" {
+		t.Fatalf("expected deduped published list, got %#v", got)
 	}
-	if got[0] != "aa" || got[1] != "bb" {
-		t.Fatalf("extras should come first: %#v", got)
-	}
-	if EffectiveMeasurements(nil)[0] != MeasurementCatalog[0] {
-		t.Fatal("empty published should use embedded catalog")
+	if len(EffectiveMeasurements(nil)) != 0 {
+		t.Fatal("empty published should yield empty catalog")
 	}
 }
 
