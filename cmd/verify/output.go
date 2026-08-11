@@ -77,7 +77,7 @@ func checkDetail(check verify.Check, challengeHex string) string {
 		return "Nonce present, but no challenge supplied to verify freshness"
 	}
 	if check.ID == "hardware_genuine" && check.ChainValidated {
-		return "full chain verified: VCEK → ASK → ARK matched to AMD Root"
+		return "Attestation came from real AMD SEV-SNP hardware with a valid AMD certificate chain"
 	}
 	if check.Detail != "" {
 		return check.Detail

@@ -1,7 +1,7 @@
 const CHECK_LABELS = {
   signature_valid: 'Signature Valid',
-  hardware_genuine: 'Hardware Genuine',
-  key_binding: 'Key Bound to Silicon',
+  hardware_genuine: 'Real AMD Hardware',
+  key_binding: 'Signing Key Bound to Hardware',
   code_legit: 'Code Legit',
   model_legit: 'Model Legit',
   gpu_wiped: 'GPU Wiped',
@@ -14,8 +14,8 @@ const CHECK_LABELS = {
 
 const CHECK_HINTS = {
   signature_valid: 'Receipt package is intact and signed by the enclave key',
-  hardware_genuine: 'VCEK → ASK → ARK',
-  key_binding: 'REPORT_DATA match',
+  hardware_genuine: 'Attestation came from real AMD SEV-SNP hardware with a valid AMD certificate chain',
+  key_binding: 'Signing key is bound into this AMD hardware attestation for this session',
   code_legit: 'measurement',
   model_legit: 'catalog hash',
   gpu_wiped: 'policy enforced',
@@ -40,19 +40,19 @@ const DERIVATION_RECEIPT_TOPICS = [
     id: 'hardware',
     checkId: 'hardware_genuine',
     swatchClass: 'hardware',
-    label: 'Hardware Genuine',
-    description: 'AMD SEV-SNP report plus cert_chain (VCEK → ASK → ARK).',
+    label: 'Real AMD Hardware',
+    description: 'Attestation came from real AMD SEV-SNP hardware with a valid AMD certificate chain.',
     fieldHint: 'Look for "cert_chain" and key fields inside "attestation.report".',
-    plainEnglish: 'This proves the derivation attestation came from real AMD silicon with a validated certificate chain.',
+    plainEnglish: 'This proves the derivation attestation came from real AMD silicon. We validate the certificate chain from the CPU up to AMD root keys, and confirm the hardware report was signed by that CPU.',
   },
   {
     id: 'key_binding',
     checkId: 'key_binding',
     swatchClass: 'key_binding',
-    label: 'Key Bound to Silicon',
-    description: 'Links pubkey + nonce into hardware attestation reportData.',
+    label: 'Signing Key Bound to Hardware',
+    description: 'Signing key is bound into this AMD hardware attestation for this session.',
     fieldHint: 'Look for "reportData" and root-level "nonce".',
-    plainEnglish: 'Confirms the signing key used for the derivation receipt was bound into the hardware attestation.',
+    plainEnglish: 'Confirms the signing key used for the derivation receipt was bound into the hardware attestation. The report must include a fingerprint of the public key combined with the session nonce.',
   },
   {
     id: 'derivation_operator',
@@ -126,8 +126,8 @@ const RECEIPT_TOPICS = [
     id: 'hardware',
     checkId: 'hardware_genuine',
     swatchClass: 'hardware',
-    label: 'Hardware Genuine',
-    description: 'AMD SEV-SNP report plus cert_chain (VCEK → ASK → ARK).',
+    label: 'Real AMD Hardware',
+    description: 'Attestation came from real AMD SEV-SNP hardware with a valid AMD certificate chain.',
     fieldHint: 'Look for "cert_chain" and key fields inside "attestation.report".',
     plainEnglish: 'This proves the attestation came from real AMD silicon. We validate the certificate chain from the CPU up to AMD root keys, and confirm the hardware report was signed by that CPU.',
   },
@@ -135,8 +135,8 @@ const RECEIPT_TOPICS = [
     id: 'key_binding',
     checkId: 'key_binding',
     swatchClass: 'key_binding',
-    label: 'Key Bound to Silicon',
-    description: 'Links pubkey + nonce into hardware attestation reportData.',
+    label: 'Signing Key Bound to Hardware',
+    description: 'Signing key is bound into this AMD hardware attestation for this session.',
     fieldHint: 'Look for "reportData" inside attestation.report.',
     plainEnglish: 'This checks that the signing key really lived inside that specific CPU enclave. The hardware attestation must include a fingerprint of the public key combined with the session nonce.',
   },
@@ -729,6 +729,10 @@ function renderAdvancedLegend(checksById, challengeHex, presentTopicIds, receipt
     if (!presentTopicIds.has(topic.id)) continue;
 
     const status = checkStatusForTopic(topic, checksById, challengeHex);
+    const check = topic.checkId ? checksById[topic.checkId] : null;
+    const hashLine = check?.hash
+      ? `<p class="verify-advanced__legend-hash">${escapeHtml(checkHashLabel(check.id))}: <code>${escapeHtml(check.hash)}</code></p>`
+      : '';
     const li = document.createElement('li');
     const item = document.createElement('div');
     item.className = 'verify-advanced__legend-item';
@@ -741,6 +745,7 @@ function renderAdvancedLegend(checksById, challengeHex, presentTopicIds, receipt
         <span class="verify-advanced__legend-status verify-advanced__legend-status--${status}">${statusLabel(status)}</span>
       </div>
       <p class="verify-advanced__legend-desc">${topic.description}</p>
+      ${hashLine}
       <div class="verify-advanced__legend-help-popup" data-help-topic="${topic.id}" hidden>${escapeHtml(topic.plainEnglish || topic.description)}</div>
     `;
     li.appendChild(item);
@@ -859,11 +864,23 @@ function setupViewMode() {
   document.getElementById('mode-advanced').addEventListener('click', () => setViewMode('advanced'));
 }
 
+const CHECK_HASH_LABELS = {
+  signature_valid: 'Signature',
+  hardware_genuine: 'Chip ID',
+  key_binding: 'REPORT_DATA',
+  code_legit: 'Measurement',
+  model_legit: 'Model commitment',
+  gpu_wiped: 'Policy hash',
+  freshness: 'Nonce',
+  proof_signature: 'Signature',
+};
+
+function checkHashLabel(checkId) {
+  return CHECK_HASH_LABELS[checkId] || checkId;
+}
+
 function renderFreshnessCheck(check, challengeHex) {
   const li = document.createElement('li');
-  const hashDisplay = check.hash
-    ? `<span class="verify-check__hash">(${truncateHex(check.hash)})</span>`
-    : '';
 
   let stateClass;
   let icon;
@@ -893,7 +910,6 @@ function renderFreshnessCheck(check, challengeHex) {
     <div class="verify-check__body">
       <div class="verify-check__label">
         ${label}
-        ${hashDisplay}
       </div>
       <div class="verify-check__detail">${detail}</div>
     </div>
@@ -910,25 +926,29 @@ function renderCheck(check, challengeHex = '') {
   const passed = check.ok;
 
   const hint = CHECK_HINTS[check.id] || '';
-  const hashDisplay = check.hash
-    ? `<span class="verify-check__hash">(${truncateHex(check.hash)})</span>`
-    : '';
 
   let detail = check.detail || hint;
   if (check.id === 'signature_valid' && passed) {
     detail = 'Receipt package is intact and signed by the enclave key';
   }
   if (check.id === 'hardware_genuine' && check.chain_validated) {
-    detail = 'Full chain verified: VCEK → ASK → ARK matched to AMD Root';
+    detail = 'Attestation came from real AMD SEV-SNP hardware with a valid AMD certificate chain';
+  }
+  if (check.id === 'key_binding' && passed) {
+    detail = 'Signing key is bound into this AMD hardware attestation for this session';
   }
 
   li.className = `verify-check ${passed ? 'verify-check--pass' : 'verify-check--fail'}`;
+  const label = check.id === 'key_binding'
+    ? 'Signing Key Bound to Hardware'
+    : check.id === 'hardware_genuine'
+      ? 'Real AMD Hardware'
+      : (check.label || CHECK_LABELS[check.id] || check.id);
   li.innerHTML = `
     ${passed ? ICON_PASS : ICON_FAIL}
     <div class="verify-check__body">
       <div class="verify-check__label">
-        ${check.label || CHECK_LABELS[check.id] || check.id}
-        ${hashDisplay}
+        ${label}
       </div>
       <div class="verify-check__detail">${detail}</div>
     </div>

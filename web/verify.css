@@ -926,6 +926,18 @@ code {
   color: var(--text-secondary);
 }
 
+.verify-advanced__legend-hash {
+  margin: var(--space-1) 0 0;
+  font: var(--fw-regular) var(--text-xs) / var(--lh-sm) var(--font-sans);
+  color: var(--text-secondary);
+}
+
+.verify-advanced__legend-hash code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
 .verify-advanced__json-wrap {
   min-width: 0;
   border: 1px solid var(--border-subtle);

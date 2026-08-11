@@ -391,7 +391,7 @@ func checkSignature(wrapper ReceiptFile, pub ed25519.PublicKey) Check {
 func checkHardware(att *sevsnp.Attestation, chain receipt.CertificateChain, roots iv.HardwareRoots) Check {
 	check := Check{
 		ID:    "hardware_genuine",
-		Label: "Hardware Genuine",
+		Label: "Real AMD Hardware",
 	}
 
 	if att == nil || att.Report == nil {
@@ -412,7 +412,7 @@ func checkHardware(att *sevsnp.Attestation, chain receipt.CertificateChain, root
 	check.OK = result.OK
 	check.ChainValidated = result.OK
 	if result.OK {
-		check.Detail = "Full chain verified: VCEK → ASK → ARK matched to AMD Root"
+		check.Detail = "Attestation came from real AMD SEV-SNP hardware with a valid AMD certificate chain"
 	} else {
 		check.Detail = result.Reason
 	}
@@ -422,7 +422,7 @@ func checkHardware(att *sevsnp.Attestation, chain receipt.CertificateChain, root
 func checkKeyBinding(att *sevsnp.Attestation, chain receipt.CertificateChain, pub ed25519.PublicKey, nonce []byte) Check {
 	check := Check{
 		ID:    "key_binding",
-		Label: "Key Bound to Silicon",
+		Label: "Signing Key Bound to Hardware",
 	}
 
 	expectedHash := enclaveKeyHash(pub, nonce)
@@ -432,7 +432,7 @@ func checkKeyBinding(att *sevsnp.Attestation, chain receipt.CertificateChain, pu
 	result := iv.VerifyKeyBinding(rc, pub, iv.Pins{Nonce: nonce})
 	if result.OK {
 		check.OK = true
-		check.Detail = "REPORT_DATA match"
+		check.Detail = "Signing key is bound into this AMD hardware attestation for this session"
 		if att != nil && att.Report != nil && len(att.Report.ReportData) > 0 {
 			check.Hash = truncateHex(hex.EncodeToString(att.Report.ReportData))
 		}

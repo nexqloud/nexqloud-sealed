@@ -332,15 +332,45 @@
       }
     }
 
+    function checkHashLabel(checkId) {
+      switch (checkId) {
+        case 'signature_valid':
+        case 'proof_signature':
+          return 'Signature';
+        case 'hardware_genuine':
+          return 'Chip ID';
+        case 'key_binding':
+          return 'REPORT_DATA';
+        case 'code_legit':
+          return 'Measurement';
+        case 'model_legit':
+          return 'Model commitment';
+        case 'gpu_wiped':
+          return 'Policy hash';
+        case 'freshness':
+          return 'Nonce';
+        default:
+          return checkId;
+      }
+    }
+
     function renderLegend() {
       if (!elements?.legend) return;
       const legend = elements.legend;
       legend.innerHTML = '';
       const presentTopicIds = collectTopicsFromDocument(currentDocument);
+      const checksById = currentContext?.checksById || {};
 
       for (const topic of topicsForDocument()) {
         if (!presentTopicIds.has(topic.id)) continue;
         const status = checkStatusForTopic(topic);
+        let check = topic.checkId ? checksById[topic.checkId] : null;
+        if (!check && topic.checkIdPrefix) {
+          check = Object.values(checksById).find((c) => c.id && c.id.startsWith(topic.checkIdPrefix));
+        }
+        const hashLine = check?.hash
+          ? `<p class="verify-advanced__legend-hash">${options.escapeHtml(checkHashLabel(check.id))}: <code>${options.escapeHtml(check.hash)}</code></p>`
+          : '';
         const li = document.createElement('li');
         const item = document.createElement('div');
         item.className = 'verify-advanced__legend-item';
@@ -353,6 +383,7 @@
         <span class="verify-advanced__legend-status verify-advanced__legend-status--${status}">${statusLabel(status)}</span>
       </div>
       <p class="verify-advanced__legend-desc">${topic.description}</p>
+      ${hashLine}
       <div class="verify-advanced__legend-help-popup" data-help-topic="${topic.id}" hidden>${options.escapeHtml(topic.plainEnglish || topic.description)}</div>
     `;
         li.appendChild(item);

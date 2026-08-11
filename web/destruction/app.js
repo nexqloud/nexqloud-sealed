@@ -5,8 +5,8 @@ const FILE_ICON = `<svg class="verify-file-chip__icon" viewBox="0 0 24 24" fill=
 
 const CHECK_LABELS = {
   signature_valid: 'Signature Valid',
-  hardware_genuine: 'Hardware Genuine',
-  key_binding: 'Key Bound to Silicon',
+  hardware_genuine: 'Real AMD Hardware',
+  key_binding: 'Signing Key Bound to Hardware',
   destruction_attestation_hash: 'Attestation Hash',
   zeroization_evidence: 'Zeroization Evidence',
   salt_epoch: 'Salt Epoch',
@@ -309,17 +309,21 @@ function renderCheck(check) {
     detail = 'Unified proof package is intact and signed by the substrate key';
   }
   if (check.id === 'hardware_genuine' && passed) {
-    detail = check.detail || 'Full chain verified: VCEK → ASK → ARK matched to AMD Root';
+    detail = 'Attestation came from real AMD SEV-SNP hardware with a valid AMD certificate chain';
   }
-  const hashDisplay = check.hash
-    ? `<span class="verify-check__hash">(${escapeHtml(check.hash)})</span>`
-    : '';
-  const label = check.label || CHECK_LABELS[check.id] || check.id;
+  if (check.id === 'key_binding' && passed) {
+    detail = 'Signing key is bound into this AMD hardware attestation for this session';
+  }
+  const label = check.id === 'key_binding'
+    ? 'Signing Key Bound to Hardware'
+    : check.id === 'hardware_genuine'
+      ? 'Real AMD Hardware'
+      : (check.label || CHECK_LABELS[check.id] || check.id);
   li.className = `verify-check ${passed ? 'verify-check--pass' : 'verify-check--fail'}`;
   li.innerHTML = `
     ${passed ? ICON_PASS : ICON_FAIL}
     <div class="verify-check__body">
-      <div class="verify-check__label">${escapeHtml(label)}${hashDisplay}</div>
+      <div class="verify-check__label">${escapeHtml(label)}</div>
       <div class="verify-check__detail">${escapeHtml(detail)}</div>
     </div>
   `;
@@ -385,8 +389,8 @@ function showPendingChecklist(receiptCount) {
 
   const perOperator = [
     'Signature Valid',
-    'Hardware Genuine',
-    'Key Bound to Silicon',
+    'Real AMD Hardware',
+    'Signing Key Bound to Hardware',
     'Attestation Hash',
     'Zeroization Evidence',
     'Salt Epoch',

@@ -190,7 +190,7 @@ func verifyDestructionReceipt(rcpt destruction.Receipt, challengeHex string, roo
 
 	pub, err := hex.DecodeString(rcpt.Pubkey)
 	if err != nil || len(pub) != ed25519.PublicKeySize {
-		checks = append(checks, Check{ID: "hardware_genuine", Label: "Hardware Genuine", Detail: "invalid pubkey"})
+		checks = append(checks, Check{ID: "hardware_genuine", Label: "Real AMD Hardware", Detail: "invalid pubkey"})
 		return checks
 	}
 	publicKey := ed25519.PublicKey(pub)
@@ -198,7 +198,7 @@ func verifyDestructionReceipt(rcpt destruction.Receipt, challengeHex string, roo
 	att := &sevsnp.Attestation{}
 	if len(rcpt.Attestation) > 0 && string(rcpt.Attestation) != "{}" {
 		if err := protojson.Unmarshal(rcpt.Attestation, att); err != nil {
-			checks = append(checks, Check{ID: "hardware_genuine", Label: "Hardware Genuine", Detail: err.Error()})
+			checks = append(checks, Check{ID: "hardware_genuine", Label: "Real AMD Hardware", Detail: err.Error()})
 			return checks
 		}
 	}
@@ -209,7 +209,7 @@ func verifyDestructionReceipt(rcpt destruction.Receipt, challengeHex string, roo
 	nonceHex := rcpt.Nonce
 	nonce, err := hex.DecodeString(nonceHex)
 	if err != nil || len(nonce) != 32 {
-		checks = append(checks, Check{ID: "key_binding", Label: "Key Bound to Silicon", Detail: "invalid nonce"})
+		checks = append(checks, Check{ID: "key_binding", Label: "Signing Key Bound to Hardware", Detail: "invalid nonce"})
 	} else {
 		checks = append(checks, checkKeyBinding(att, rcpt.CertChain, publicKey, nonce))
 	}
