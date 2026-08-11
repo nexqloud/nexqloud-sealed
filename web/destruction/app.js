@@ -302,6 +302,12 @@ function renderCheck(check) {
   const li = document.createElement('li');
   const passed = !!check.ok;
   let detail = check.detail || '';
+  if (check.id === 'signature_valid' && passed) {
+    detail = 'Receipt package is intact and signed by the enclave key';
+  }
+  if (check.id === 'proof_signature' && passed) {
+    detail = 'Unified proof package is intact and signed by the substrate key';
+  }
   if (check.id === 'hardware_genuine' && passed) {
     detail = check.detail || 'Full chain verified: VCEK → ASK → ARK matched to AMD Root';
   }

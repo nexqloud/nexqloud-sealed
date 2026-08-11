@@ -14,7 +14,6 @@ permissions:
   contents: read
 
 env:
-  R2_ACCOUNT_ID: "285ada7dda5a9110cc820302071df4f1"
   R2_BUCKET: "nexqloud-sealed-ai"
   R2_PUBLIC_BASE_URL: "https://pub-84b99924d959400aa97608c84bbd8000.r2.dev"
 
@@ -46,10 +45,15 @@ jobs:
 
       - name: Publish allowlists to R2
         env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           ENV_NAME: ${{ steps.env.outputs.name }}
         run: |
           set -euo pipefail
+          if [[ -z "${R2_ACCOUNT_ID:-}" || -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+            echo "Missing R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY for environment '${ENV_NAME}'." >&2
+            exit 1
+          fi
           chmod +x scripts/upload-gpu-wipe-r2.sh
           ./scripts/upload-gpu-wipe-r2.sh

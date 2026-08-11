@@ -381,9 +381,9 @@ func checkSignature(wrapper ReceiptFile, pub ed25519.PublicKey) Check {
 	check.Hash = truncateHex(wrapper.Signature)
 	if ed25519.Verify(pub, canonical, sig) {
 		check.OK = true
-		check.Detail = "ed25519 over RFC 8785 canonical package"
+		check.Detail = "Receipt package is intact and signed by the enclave key"
 	} else {
-		check.Detail = "ed25519 verification failed"
+		check.Detail = "Signature does not match the package"
 	}
 	return check
 }

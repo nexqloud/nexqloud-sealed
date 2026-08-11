@@ -35,7 +35,6 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}/sealed-wipe
-  R2_ACCOUNT_ID: "285ada7dda5a9110cc820302071df4f1"
   R2_BUCKET: "nexqloud-sealed-ai"
 
 jobs:
@@ -128,12 +127,17 @@ jobs:
       - name: Publish workers allowlist (R2 + repo)
         if: github.event_name != 'pull_request' && steps.env.outputs.name != 'preview'
         env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           ENV_NAME: ${{ steps.env.outputs.name }}
           COMMITMENT: ${{ steps.commitment.outputs.value }}
         run: |
           set -euo pipefail
+          if [[ -z "${R2_ACCOUNT_ID:-}" || -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+            echo "Missing R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY for environment '${ENV_NAME}'." >&2
+            exit 1
+          fi
           chmod +x scripts/publish-wipe-workers-allowlist.sh
           PUBLISH_R2=1 ./scripts/publish-wipe-workers-allowlist.sh
           if git diff --quiet -- web/sealed-wipe-workers/"${ENV_NAME}"/allowlist.json; then

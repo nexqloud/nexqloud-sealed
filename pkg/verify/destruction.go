@@ -185,7 +185,7 @@ func verifyDestructionReceipt(rcpt destruction.Receipt, challengeHex string, roo
 	if err := destruction.VerifyReceipt(rcpt); err != nil {
 		checks = append(checks, Check{ID: "signature_valid", Label: "Signature Valid", Detail: err.Error()})
 	} else {
-		checks = append(checks, Check{ID: "signature_valid", Label: "Signature Valid", OK: true, Detail: "Ed25519 signature verified"})
+		checks = append(checks, Check{ID: "signature_valid", Label: "Signature Valid", OK: true, Detail: "Receipt package is intact and signed by the enclave key"})
 	}
 
 	pub, err := hex.DecodeString(rcpt.Pubkey)
@@ -332,7 +332,7 @@ func checkUnifiedProof(proof destruction.Proof, receipts []destruction.Receipt) 
 	if err := destruction.VerifyProof(proof); err != nil {
 		checks = append(checks, Check{ID: "proof_signature", Label: "Proof Signature", Detail: err.Error()})
 	} else {
-		checks = append(checks, Check{ID: "proof_signature", Label: "Proof Signature", OK: true, Detail: "substrate signature verified"})
+		checks = append(checks, Check{ID: "proof_signature", Label: "Proof Signature", OK: true, Detail: "Unified proof package is intact and signed by the substrate key"})
 	}
 
 	quorum := proofQuorum(proof)

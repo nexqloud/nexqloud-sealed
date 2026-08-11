@@ -4,9 +4,9 @@ const PROOF_TOPICS = [
     checkId: 'proof_signature',
     swatchClass: 'signature',
     label: 'Proof Signature',
-    description: 'Substrate Ed25519 signature over the canonical proof package.',
+    description: 'Unified proof package is intact and signed by the substrate key.',
     fieldHint: 'Look for "signature", "pubkey", and fields inside "package".',
-    plainEnglish: 'The federation substrate signed the unified destruction proof. We verify that signature with the public key in the proof.',
+    plainEnglish: 'The federation substrate signed the unified destruction proof. We verify that signature with the public key in the proof, so nothing in the package was changed after signing.',
   },
   {
     id: 'quorum',
@@ -74,9 +74,9 @@ const RECEIPT_TOPICS = [
     checkId: 'signature_valid',
     swatchClass: 'signature',
     label: 'Signature Valid',
-    description: 'Ed25519 signature over the RFC 8785 canonical package.',
+    description: 'Receipt package is intact and signed by the enclave key.',
     fieldHint: 'Look for "signature", "pubkey", and all fields inside "package".',
-    plainEnglish: 'The operator signed destruction claims with its enclave private key. We verify that signature using the public key in the receipt.',
+    plainEnglish: 'The operator signed destruction claims with its enclave private key. We verify that signature using the public key in the receipt, so nothing in the package was changed after signing.',
   },
   {
     id: 'hardware',

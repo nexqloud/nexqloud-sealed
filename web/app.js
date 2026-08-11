@@ -13,7 +13,7 @@ const CHECK_LABELS = {
 };
 
 const CHECK_HINTS = {
-  signature_valid: 'ed25519',
+  signature_valid: 'Receipt package is intact and signed by the enclave key',
   hardware_genuine: 'VCEK → ASK → ARK',
   key_binding: 'REPORT_DATA match',
   code_legit: 'measurement',
@@ -32,9 +32,9 @@ const DERIVATION_RECEIPT_TOPICS = [
     checkId: 'signature_valid',
     swatchClass: 'signature',
     label: 'Signature Valid',
-    description: 'Ed25519 signature over the RFC 8785 canonical package, verified with pubkey.',
+    description: 'Receipt package is intact and signed by the enclave key.',
     fieldHint: 'Look for "signature", "pubkey", and all fields inside "package".',
-    plainEnglish: 'The sealing operator signed the derivation claims with its enclave private key. We verify that signature using the public key in the receipt.',
+    plainEnglish: 'The sealing operator signed the derivation claims with its enclave private key. We verify that signature using the public key in the receipt, so nothing in the package was changed after signing.',
   },
   {
     id: 'hardware',
@@ -118,7 +118,7 @@ const RECEIPT_TOPICS = [
     checkId: 'signature_valid',
     swatchClass: 'signature',
     label: 'Signature Valid',
-    description: 'Ed25519 signature over the RFC 8785 canonical package, verified with pubkey.',
+    description: 'Receipt package is intact and signed by the enclave key.',
     fieldHint: 'Look for "signature", "pubkey", and all fields inside "package".',
     plainEnglish: 'The secure enclave signed the receipt claims with its private key. We verify that signature using the public key in the receipt, so you know nobody changed the package after it was signed.',
   },
@@ -915,6 +915,9 @@ function renderCheck(check, challengeHex = '') {
     : '';
 
   let detail = check.detail || hint;
+  if (check.id === 'signature_valid' && passed) {
+    detail = 'Receipt package is intact and signed by the enclave key';
+  }
   if (check.id === 'hardware_genuine' && check.chain_validated) {
     detail = 'Full chain verified: VCEK → ASK → ARK matched to AMD Root';
   }
