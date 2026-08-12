@@ -71,7 +71,7 @@ func VerifyReceiptJSON(receiptJSON []byte, challengeHex string, rootsCatalog map
 // Model Legit: Models is the published model_commitment allowlist. ModelAttestIssuers
 // are ed25519 pubkey hex values allowed to sign model_commitment_cert.
 //
-// GPU Wiped: GPUPolicyHashes, WipeIssuers (ed25519 pubkey hex), and WipeWorkers
+// GPU Memory Cleared: GPUPolicyHashes, WipeIssuers (ed25519 pubkey hex), and WipeWorkers
 // (worker binary sha256 commitments) come from published allowlists.
 type VerifyOpts struct {
 	ChallengeHex        string
@@ -590,7 +590,7 @@ func checkModelLegit(pkg map[string]any, opts VerifyOpts) Check {
 func checkGPUWiped(pkg map[string]any, opts VerifyOpts) Check {
 	check := Check{
 		ID:    "gpu_wiped",
-		Label: "GPU Wiped",
+		Label: "GPU Memory Cleared",
 	}
 
 	policyHash, _ := pkg["gpu_policy_hash"].(string)
@@ -701,13 +701,9 @@ func checkGPUWiped(pkg map[string]any, opts VerifyOpts) Check {
 	}
 
 	check.OK = true
-	check.Detail = "two-pass wipe cert verified"
+	check.Detail = "After this response, GPU memory was cleared by a NexQloud-published wipe worker"
 	if cert.Method == gpu.MethodDevNoop {
-		check.Detail = "dev-noop wipe cert verified"
-	}
-	if cert.KVCacheCleared {
-		n := len(cert.SlotsErased)
-		check.Detail = fmt.Sprintf("%s; kv cleared (%d slots)", check.Detail, n)
+		check.Detail = "Development wipe placeholder verified (no GPU memory cleared)"
 	}
 	return check
 }
@@ -715,13 +711,13 @@ func checkGPUWiped(pkg map[string]any, opts VerifyOpts) Check {
 func checkFreshness(nonceHex, challengeHex string) Check {
 	check := Check{
 		ID:    "freshness",
-		Label: "Freshness",
+		Label: "Fresh Response",
 		Hash:  truncateHex(nonceHex),
 	}
 
 	if challengeHex == "" {
 		check.OK = true
-		check.Detail = "nonce present (no challenge supplied)"
+		check.Detail = "A request nonce is present, but freshness was not checked because no challenge was supplied"
 		return check
 	}
 
@@ -739,9 +735,9 @@ func checkFreshness(nonceHex, challengeHex string) Check {
 
 	if bytes.Equal(nonce, challenge) {
 		check.OK = true
-		check.Detail = "nonce matches challenge"
+		check.Detail = "This receipt matches the one-time challenge sent with the request"
 	} else {
-		check.Detail = "nonce does not match challenge"
+		check.Detail = "This receipt does not match the challenge for this request"
 	}
 	return check
 }

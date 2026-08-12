@@ -23,8 +23,7 @@ supported, starts llama with:
 | `-cram 0` | Disable RAM prompt cache (no save/restore of idle slot KV) |
 | `--no-context-shift` | Avoid context-shift path (also GHSA-8947-pfff-2f3c) |
 | `--slots` | Keep `/slots` monitoring + erase API |
-
-Do **not** pass `--slot-save-path` (keeps save/restore-to-disk unavailable).
+| `--slot-save-path /tmp/llama-slots` | Required by current llama-server to unlock `action=erase` (also unlocks save/restore). Mounted as container tmpfs — never bind-mounted to the host. |
 
 Pin the image by digest once verified (`nerdctl image inspect` output printed
 by the start script). Isolation claims depend on which llama build is running.
@@ -60,8 +59,9 @@ So:
 LLAMA_URL=http://127.0.0.1:8032 ./scripts/kv-isolation-check.sh
 ```
 
-The script asserts `/props` (cache_prompt false, one slot when reported), runs
-a canary leak probe across two overlapping requests, then erases slot 0 with
+The script asserts `/props` (`total_slots: 1`; `cache_prompt: false` when that
+field is exposed — some llama-server builds omit it from GET `/props`), runs a
+canary leak probe across two overlapping requests, then erases slot 0 with
 `Content-Length: 0` (workaround for llama.cpp hang #17387) and checks `/slots`.
 
 ## When to revisit a fork

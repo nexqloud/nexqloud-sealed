@@ -4,8 +4,8 @@ const CHECK_LABELS = {
   key_binding: 'Signing Key Bound to Hardware',
   code_legit: 'Approved Enclave Code',
   model_legit: 'Approved Model',
-  gpu_wiped: 'GPU Wiped',
-  freshness: 'Freshness',
+  gpu_wiped: 'GPU Memory Cleared',
+  freshness: 'Fresh Response',
   derivation_operator_id: 'Operator ID',
   derivation_attestation_hash: 'Attestation Hash',
   derivation_tenant_hash: 'Tenant ID Hash',
@@ -18,8 +18,8 @@ const CHECK_HINTS = {
   key_binding: 'Signing key is bound into this AMD hardware attestation for this session',
   code_legit: 'Enclave code matches a NexQloud-published build (Sigstore proof or R2 allowlist)',
   model_legit: 'Model weights match a NexQloud-published model commitment',
-  gpu_wiped: 'policy enforced',
-  freshness: 'nonce challenge',
+  gpu_wiped: 'After this response, GPU memory was cleared by a NexQloud-published wipe worker',
+  freshness: 'This receipt matches the one-time challenge sent with the request',
 };
 
 const ICON_PASS = `<svg class="verify-check__icon verify-check__icon--pass" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 9.2l2.1 2.1 4.9-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
@@ -162,19 +162,19 @@ const RECEIPT_TOPICS = [
     id: 'gpu_wiped',
     checkId: 'gpu_wiped',
     swatchClass: 'gpu_wiped',
-    label: 'GPU Wiped',
-    description: 'Signed two-pass VRAM wipe certificate from an allowlisted wipe worker.',
+    label: 'GPU Memory Cleared',
+    description: 'After this response, GPU memory was cleared by a NexQloud-published wipe worker.',
     fieldHint: 'Look for "gpu_policy_hash" and "zeroization_cert" (method, pubkey, worker_commitment) inside package.',
-    plainEnglish: 'Checks that GPU memory was wiped and isolation rules were enforced before inference. We compare the policy hash and wipe certificate against expected values.',
+    plainEnglish: 'Confirms that after this response, GPU memory was cleared by a signed wipe from a NexQloud-published worker, under an allowlisted isolation policy.',
   },
   {
     id: 'freshness',
     checkId: 'freshness',
     swatchClass: 'freshness',
-    label: 'Freshness',
-    description: 'Session nonce — compared to your challenge input when supplied.',
+    label: 'Fresh Response',
+    description: 'This receipt matches the one-time challenge sent with the request.',
     fieldHint: 'Look for "nonce" inside package.',
-    plainEnglish: 'If you paste a challenge nonce, we check it matches the nonce in the receipt. That shows this response was made for your session, not copied from an older one. Without a challenge, we only confirm a nonce exists.',
+    plainEnglish: 'If you paste a challenge nonce, we check it matches the nonce in the receipt. That shows this response was made for your request, not copied from an older one. Without a challenge, freshness is not checked.',
   },
   {
     id: 'signed_only',
@@ -206,7 +206,13 @@ const DEFAULT_COLLAPSED = ['attestation.report.__other__'];
 let wasmReady = false;
 let viewMode = 'simple';
 let lastReceipt = null;
+let lastReceiptJSON = null;
+let lastRekorInfo = null;
+let lastRekorError = null;
+let lastVerifyOptsJSON = null;
 let lastRenderContext = null;
+let challengeReverifyTimer = null;
+let challengeReverifySeq = 0;
 let expandedPaths = new Set();
 let collapsedSections = new Set(DEFAULT_COLLAPSED);
 let receiptHoverBound = false;
@@ -890,18 +896,18 @@ function renderFreshnessCheck(check, challengeHex) {
   if (challengeHex === '') {
     stateClass = 'verify-check--skipped';
     icon = ICON_SKIPPED;
-    label = 'Freshness (Skipped)';
-    detail = 'Nonce present, but no challenge supplied to verify freshness';
+    label = 'Fresh Response (Not Checked)';
+    detail = 'A request nonce is present, but freshness was not checked because no challenge was supplied';
   } else if (check.ok) {
     stateClass = 'verify-check--pass';
     icon = ICON_PASS;
     label = CHECK_LABELS.freshness;
-    detail = 'nonce matches challenge';
+    detail = 'This receipt matches the one-time challenge sent with the request';
   } else {
     stateClass = 'verify-check--fail';
     icon = ICON_FAIL;
     label = CHECK_LABELS.freshness;
-    detail = check.detail || 'nonce does not match challenge';
+    detail = check.detail || 'This receipt does not match the challenge for this request';
   }
 
   li.className = `verify-check ${stateClass}`;
@@ -945,6 +951,9 @@ function renderCheck(check, challengeHex = '') {
   if (check.id === 'model_legit' && passed) {
     detail = 'Model weights match a NexQloud-published model commitment';
   }
+  if (check.id === 'gpu_wiped' && passed) {
+    detail = 'After this response, GPU memory was cleared by a NexQloud-published wipe worker';
+  }
 
   li.className = `verify-check ${passed ? 'verify-check--pass' : 'verify-check--fail'}`;
   const label = check.id === 'key_binding'
@@ -955,7 +964,9 @@ function renderCheck(check, challengeHex = '') {
         ? 'Approved Enclave Code'
         : check.id === 'model_legit'
           ? 'Approved Model'
-          : (check.label || CHECK_LABELS[check.id] || check.id);
+          : check.id === 'gpu_wiped'
+            ? 'GPU Memory Cleared'
+            : (check.label || CHECK_LABELS[check.id] || check.id);
   li.innerHTML = `
     ${passed ? ICON_PASS : ICON_FAIL}
     <div class="verify-check__body">
@@ -1316,37 +1327,75 @@ async function loadGPUWipeVerifyOpts() {
   return { gpu_policy_hashes: policyHashes, wipe_issuers: wipeIssuers, wipe_workers: wipeWorkers };
 }
 
-async function runWasmVerify(receiptJSON) {
+async function runWasmVerify(receiptJSON, { reuseOpts = false } = {}) {
   if (!wasmReady) throw new Error('Wasm module not loaded');
 
   const challenge = document.getElementById('challenge-input').value.trim();
-  setStatus('Fetching Sigstore proof and allowlists…');
-  const measurement = extractReceiptMeasurement(receiptJSON);
-  const [proof, models, modelAttestIssuers, gpuOpts] = await Promise.all([
-    measurement ? loadMeasurementProof(measurement) : Promise.resolve(null),
-    loadModelCommitments(),
-    loadModelAttestIssuers(),
-    loadGPUWipeVerifyOpts(),
-  ]);
-  let measurements = [];
-  if (!proof) {
-    measurements = await loadAllowlistMeasurements();
+  let optsJSON = reuseOpts ? lastVerifyOptsJSON : null;
+  if (!optsJSON) {
+    setStatus('Fetching Sigstore proof and allowlists…');
+    const measurement = extractReceiptMeasurement(receiptJSON);
+    const [proof, models, modelAttestIssuers, gpuOpts] = await Promise.all([
+      measurement ? loadMeasurementProof(measurement) : Promise.resolve(null),
+      loadModelCommitments(),
+      loadModelAttestIssuers(),
+      loadGPUWipeVerifyOpts(),
+    ]);
+    let measurements = [];
+    if (!proof) {
+      measurements = await loadAllowlistMeasurements();
+    }
+    const opts = {
+      ...(proof ? { proofs: [proof] } : { measurements }),
+      models,
+      model_attest_issuers: modelAttestIssuers,
+      ...gpuOpts,
+    };
+    optsJSON = JSON.stringify(opts);
+    lastVerifyOptsJSON = optsJSON;
   }
-  const opts = {
-    ...(proof ? { proofs: [proof] } : { measurements }),
-    models,
-    model_attest_issuers: modelAttestIssuers,
-    ...gpuOpts,
-  };
   const resultJSON = globalThis.verifyReceipt(
     receiptJSON,
     challenge,
-    JSON.stringify(opts),
+    optsJSON,
   );
   const result = JSON.parse(resultJSON);
 
   if (result.error) throw new Error(result.error);
   return result;
+}
+
+async function reverifyLoadedReceipt() {
+  if (!lastReceiptJSON || !wasmReady) return;
+  const seq = ++challengeReverifySeq;
+  setStatus('Updating freshness check…');
+  try {
+    const wasmResult = await runWasmVerify(lastReceiptJSON, { reuseOpts: true });
+    if (seq !== challengeReverifySeq) return;
+    hideStatus();
+    const challenge = document.getElementById('challenge-input').value.trim();
+    renderResults(wasmResult, lastRekorInfo, lastRekorError, challenge);
+  } catch (err) {
+    if (seq !== challengeReverifySeq) return;
+    hideStatus();
+    alert(`Verification error: ${err.message}`);
+  }
+}
+
+function scheduleChallengeReverify() {
+  if (!lastReceiptJSON) return;
+  if (challengeReverifyTimer) clearTimeout(challengeReverifyTimer);
+  challengeReverifyTimer = setTimeout(() => {
+    challengeReverifyTimer = null;
+    reverifyLoadedReceipt();
+  }, 250);
+}
+
+function setupChallengeInput() {
+  const input = document.getElementById('challenge-input');
+  if (!input) return;
+  input.addEventListener('input', scheduleChallengeReverify);
+  input.addEventListener('change', scheduleChallengeReverify);
 }
 
 async function handleFile(file) {
@@ -1365,6 +1414,11 @@ async function handleFile(file) {
     hideStatus();
     return;
   }
+
+  lastReceiptJSON = text;
+  lastVerifyOptsJSON = null;
+  lastRekorInfo = null;
+  lastRekorError = null;
 
   setStatus('Running cryptographic verification in WebAssembly…');
   let wasmResult;
@@ -1392,6 +1446,8 @@ async function handleFile(file) {
   hideStatus();
   const challenge = document.getElementById('challenge-input').value.trim();
   lastReceipt = receipt;
+  lastRekorInfo = rekorInfo;
+  lastRekorError = rekorError;
   renderResults(wasmResult, rekorInfo, rekorError, challenge);
 }
 
@@ -1490,6 +1546,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupThemeToggle();
   setupDropZone();
   setupViewMode();
+  setupChallengeInput();
   setStatus('Loading WebAssembly verifier…');
   try {
     await initWasm();

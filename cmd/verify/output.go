@@ -74,7 +74,7 @@ func checkMark(check verify.Check, challengeHex string, color bool) (string, str
 
 func checkDetail(check verify.Check, challengeHex string) string {
 	if check.ID == "freshness" && challengeHex == "" {
-		return "Nonce present, but no challenge supplied to verify freshness"
+		return "A request nonce is present, but freshness was not checked because no challenge was supplied"
 	}
 	if check.ID == "hardware_genuine" && check.ChainValidated {
 		return "Attestation came from real AMD SEV-SNP hardware with a valid AMD certificate chain"

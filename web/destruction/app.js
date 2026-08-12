@@ -11,7 +11,7 @@ const CHECK_LABELS = {
   zeroization_evidence: 'Zeroization Evidence',
   salt_epoch: 'Salt Epoch',
   destruction_tenant_hash: 'Tenant Hash',
-  freshness: 'Freshness',
+  freshness: 'Fresh Response',
   registry_quorum: 'Registry Quorum',
   proof_signature: 'Proof Signature',
   merkle_root: 'Unified Merkle Root',
@@ -395,7 +395,7 @@ function showPendingChecklist(receiptCount) {
     'Zeroization Evidence',
     'Salt Epoch',
     'Tenant Hash',
-    'Freshness',
+    'Fresh Response',
   ];
   for (let i = 0; i < receiptCount; i++) {
     const section = document.createElement('section');

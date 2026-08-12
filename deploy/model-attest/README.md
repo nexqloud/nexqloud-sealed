@@ -47,7 +47,8 @@ nerdctl run -d --name sealed-llama \
   -v /var/lib/nexqloud/models:/models:ro \
   ghcr.io/ggml-org/llama.cpp:server \
   -m /models/qwen-0.5b.gguf --host 0.0.0.0 --port 8080 \
-  -np 1 -sps 0.0 --no-cache-prompt -cram 0 --no-context-shift --slots
+  -np 1 -sps 0.0 --no-cache-prompt -cram 0 --no-context-shift --slots \
+  --slot-save-path /tmp/llama-slots
 
 # 2) model-attest on the same volume
 nerdctl pull ghcr.io/nexqloud/nexqloud-sealed/sealed-model-attest:stage

@@ -34,31 +34,46 @@ except Exception as e:
     print(f"FAIL: props not JSON: {e}", file=sys.stderr)
     sys.exit(1)
 
-# Shapes vary by llama.cpp version; accept a few common layouts.
-dgs = props.get("default_generation_settings") or props.get("default_generation_settings".replace("_", "-")) or {}
+# Shapes vary by llama.cpp version. Recent builds nest sampling under
+# default_generation_settings.params and often omit cache_prompt entirely.
+dgs = props.get("default_generation_settings") or {}
 if not isinstance(dgs, dict):
     dgs = {}
+params = dgs.get("params") if isinstance(dgs.get("params"), dict) else {}
 
-cache_prompt = dgs.get("cache_prompt")
-if cache_prompt is None:
-    cache_prompt = props.get("cache_prompt")
+cache_prompt = None
+for src in (params, dgs, props):
+    if "cache_prompt" in src:
+        cache_prompt = src["cache_prompt"]
+        break
+
 total_slots = props.get("total_slots")
 if total_slots is None:
     total_slots = props.get("n_slots") or dgs.get("n_slots")
 
 errors = []
-if cache_prompt is not False and cache_prompt != 0:
-    errors.append(f"cache_prompt expected false, got {cache_prompt!r}")
-if total_slots is not None and int(total_slots) != 1:
+if total_slots is None:
+    errors.append("total_slots missing from /props")
+elif int(total_slots) != 1:
     errors.append(f"total_slots expected 1, got {total_slots!r}")
+
+# cache_prompt is not exposed by every llama-server build's GET /props.
+# When present it must be false; when absent, the canary probe below is the proof.
+if cache_prompt is not None and cache_prompt is not False and cache_prompt != 0:
+    errors.append(f"cache_prompt expected false, got {cache_prompt!r}")
+
 if errors:
     for e in errors:
         print(f"FAIL: {e}", file=sys.stderr)
     print("props dump:", json.dumps(props, indent=2)[:2000], file=sys.stderr)
     sys.exit(1)
-print(f"cache_prompt={cache_prompt} total_slots={total_slots}")
+
+endpoint_slots = props.get("endpoint_slots")
+print(f"cache_prompt={cache_prompt!r} total_slots={total_slots} endpoint_slots={endpoint_slots!r}")
+if cache_prompt is None:
+    print("WARN: /props does not expose cache_prompt; relying on canary probe", file=sys.stderr)
 PY
-ok "props assert cache_prompt=false, total_slots=1 (when reported)"
+ok "props assert total_slots=1 (cache_prompt when reported)"
 
 echo "==> canary completion (request A)"
 RESP_A="$(curl -fsS "${LLAMA_URL}/v1/chat/completions" \
@@ -107,12 +122,19 @@ PY
 ok "canary did not leak into request B"
 
 echo "==> POST /slots/0?action=erase"
-ERASE_CODE="$(curl -sS -o /tmp/kv-erase-body.json -w '%{http_code}' \
+ERASE_BODY="$(mktemp)"
+ERASE_CODE="$(curl -sS -o "${ERASE_BODY}" -w '%{http_code}' \
   -X POST "${LLAMA_URL}/slots/0?action=erase" \
   -H 'Content-Length: 0' || true)"
 if [[ "${ERASE_CODE}" != "200" ]]; then
-  fail "erase returned HTTP ${ERASE_CODE}: $(cat /tmp/kv-erase-body.json 2>/dev/null || true)"
+  body="$(cat "${ERASE_BODY}" 2>/dev/null || true)"
+  rm -f "${ERASE_BODY}"
+  if [[ "${ERASE_CODE}" == "501" ]] && grep -q 'slot-save-path' <<<"${body}"; then
+    fail "erase returned HTTP 501 (need --slot-save-path). Re-run scripts/start-sealed-sidecars.sh: ${body}"
+  fi
+  fail "erase returned HTTP ${ERASE_CODE}: ${body}"
 fi
+rm -f "${ERASE_BODY}"
 ok "erase HTTP 200"
 
 echo "==> GET /slots after erase"

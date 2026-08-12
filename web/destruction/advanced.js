@@ -136,10 +136,10 @@ const RECEIPT_TOPICS = [
     id: 'freshness',
     checkId: 'freshness',
     swatchClass: 'freshness',
-    label: 'Freshness',
-    description: 'Session nonce bound into the destruction receipt.',
+    label: 'Fresh Response',
+    description: 'This receipt matches the one-time challenge sent with the request.',
     fieldHint: 'Look for root-level "nonce".',
-    plainEnglish: 'The coordinator-issued nonce ties this receipt to a specific deletion request.',
+    plainEnglish: 'The coordinator-issued nonce ties this receipt to a specific deletion request. Without a challenge, freshness is not checked.',
   },
   {
     id: 'operator',

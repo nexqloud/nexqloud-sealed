@@ -4,7 +4,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
-	"strings"
 	"testing"
 	"time"
 
@@ -151,7 +150,8 @@ func TestCheckGPUWipedKVClearedDetail(t *testing.T) {
 	if !check.OK {
 		t.Fatalf("expected ok, got %s", check.Detail)
 	}
-	if !strings.Contains(check.Detail, "kv cleared (1 slots)") {
+	want := "After this response, GPU memory was cleared by a NexQloud-published wipe worker"
+	if check.Detail != want {
 		t.Fatalf("detail=%q", check.Detail)
 	}
 }

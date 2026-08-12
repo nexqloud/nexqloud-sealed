@@ -98,6 +98,10 @@ add_llama_flag "--no-cache-prompt"
 add_llama_flag "-cram" "0"
 add_llama_flag "--no-context-shift"
 add_llama_flag "--slots"
+# Required by this llama-server build to enable POST /slots/{id}?action=erase
+# (save/restore are also unlocked). Keep the path container-local / ephemeral —
+# do not bind-mount it to the host.
+add_llama_flag "--slot-save-path" "/tmp/llama-slots"
 
 echo "==> sealed-wipe (GPU; reaches llama via ${LLAMA_URL})"
 nerdctl run -d --name sealed-wipe \
@@ -126,9 +130,12 @@ nerdctl run -d --name sealed-model-attest \
 
 echo "==> sealed-llama (local GGUF; runc — kata cannot reliably bind-mount host files)"
 echo "    isolation flags: ${LLAMA_EXTRA_FLAGS[*]:-(none detected)}"
+# --slot-save-path must exist inside the container (llama returns 501 for erase
+# without it; tmpfs keeps any save/restore off the host disk).
 nerdctl run -d --name sealed-llama \
   --network "${SEALED_NET}" \
   --restart unless-stopped \
+  --tmpfs /tmp/llama-slots:rw,mode=1777,size=64m \
   -v "${MODEL_HOST_PATH}:/models/${MODEL_ID}.gguf:ro" \
   -p "127.0.0.1:${LLAMA_HOST_PORT}:8080" \
   "${LLAMA_IMAGE}" \
@@ -138,7 +145,12 @@ nerdctl run -d --name sealed-llama \
 echo "==> waiting for health"
 wait_http "http://127.0.0.1:19001/health" "wipe"
 wait_http "http://127.0.0.1:19002/health" "model-attest"
-wait_http "http://127.0.0.1:${LLAMA_HOST_PORT}/health" "llama"
+if ! wait_http "http://127.0.0.1:${LLAMA_HOST_PORT}/health" "llama"; then
+  echo "==> sealed-llama failed health; recent logs:" >&2
+  nerdctl logs --tail 80 sealed-llama 2>&1 || true
+  nerdctl ps -a --filter name=sealed-llama || true
+  exit 1
+fi
 
 DIGEST="$(nerdctl image inspect --format '{{index .RepoDigests 0}}' "${LLAMA_IMAGE}" 2>/dev/null || true)"
 
