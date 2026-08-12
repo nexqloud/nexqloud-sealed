@@ -18,6 +18,8 @@ type Policy struct {
 	Persistence    string `json:"persistence"`
 	NetworkEgress  string `json:"network_egress"`
 	PayloadLogging string `json:"payload_logging"`
+	PromptCache    string `json:"prompt_cache"`
+	KVCacheClear   string `json:"kv_cache_clear"`
 	Model          string `json:"model"`
 }
 
@@ -31,6 +33,8 @@ func DefaultPolicy() Policy {
 		Persistence:    "disabled",
 		NetworkEgress:  "deny",
 		PayloadLogging: "disabled",
+		PromptCache:    "disabled",
+		KVCacheClear:   "per-response",
 		Model:          model,
 	}
 }
@@ -41,6 +45,8 @@ func DevReferencePolicy() Policy {
 		Persistence:    "disabled",
 		NetworkEgress:  "deny",
 		PayloadLogging: "disabled",
+		PromptCache:    "disabled",
+		KVCacheClear:   "per-response",
 		Model:          "mock-model",
 	}
 }

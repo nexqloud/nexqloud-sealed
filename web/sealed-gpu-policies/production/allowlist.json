@@ -5,6 +5,11 @@
     {
       "id": "qwen-0.5b",
       "model": "qwen-0.5b",
+      "policy_hash": "sha256:f172218fa30b8e603776faf835671de89c180c28934711dcd7315a25dcde5ead"
+    },
+    {
+      "id": "qwen-0.5b-pre-kv-isolation",
+      "model": "qwen-0.5b",
       "policy_hash": "sha256:404ce44f9a841944db9e2a4b40522f1e22561547918c38ec5bc016676a48b23e"
     }
   ]

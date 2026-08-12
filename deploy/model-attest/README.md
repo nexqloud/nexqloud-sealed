@@ -35,13 +35,19 @@ Or: `./scripts/fetch-sealed-model.sh staging qwen-0.5b /var/lib/nexqloud/models`
 ## nerdctl (nanoserver)
 
 ```bash
-# 1) llama on the local file (no -hf)
+# Prefer scripts/start-sealed-sidecars.sh — it creates sealed-net, isolation
+# flags, and wires LLAMA_URL for the wipe worker. Manual equivalent:
+
+nerdctl network create sealed-net 2>/dev/null || true
+
+# 1) llama on the local file (no -hf); isolation flags disable KV reuse
 nerdctl run -d --name sealed-llama \
-  --gpus all \
-  -p 127.0.0.1:8081:8080 \
+  --network sealed-net \
+  -p 127.0.0.1:8032:8080 \
   -v /var/lib/nexqloud/models:/models:ro \
-  ghcr.io/.../llama-server \
-  -m /models/model.gguf --host 0.0.0.0 --port 8080
+  ghcr.io/ggml-org/llama.cpp:server \
+  -m /models/qwen-0.5b.gguf --host 0.0.0.0 --port 8080 \
+  -np 1 -sps 0.0 --no-cache-prompt -cram 0 --no-context-shift --slots
 
 # 2) model-attest on the same volume
 nerdctl pull ghcr.io/nexqloud/nexqloud-sealed/sealed-model-attest:stage
@@ -49,7 +55,7 @@ nerdctl pull ghcr.io/nexqloud/nexqloud-sealed/sealed-model-attest:stage
 nerdctl run -d --name sealed-model-attest \
   -p 127.0.0.1:19002:19002 \
   -v /var/lib/nexqloud/models:/models:ro \
-  -e MODEL_PATH=/models/model.gguf \
+  -e MODEL_PATH=/models/qwen-0.5b.gguf \
   -e MODEL_ATTEST_LISTEN=0.0.0.0:19002 \
   -e MODEL_ATTEST_ISSUER_PRIVKEY='…' \
   -e MODEL_ATTEST_ISSUER_ID=nexqloud-model-attest \
@@ -63,6 +69,8 @@ curl -sS http://127.0.0.1:19002/health
 #    Do not set NEXQLOUD_MODEL_COMMIT in production.
 ```
 
+See [`docs/kv-isolation.md`](../../docs/kv-isolation.md) for why the llama
+flags matter.
 Generate issuer keys with `scripts/gen-model-attest-issuer.sh` and put the
 pubkey in `web/sealed-model-attest-issuers/{env}/allowlist.json` (never commit
 the private seed).

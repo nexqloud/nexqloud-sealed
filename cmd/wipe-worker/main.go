@@ -40,8 +40,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("worker commitment: %v", err)
 	}
-	log.Printf("wipe-worker listening on %s issuer=%s commitment=%s mode=%s",
-		addr, issuer, commitment, envOr("WIPE_MODE", wipe.ModeCUDA))
+	llamaURL := strings.TrimRight(strings.TrimSpace(os.Getenv("LLAMA_URL")), "/")
+	kvRequired := envOr("WIPE_KV_REQUIRED", "1") != "0"
+	log.Printf("wipe-worker listening on %s issuer=%s commitment=%s mode=%s llama_url=%q kv_required=%v",
+		addr, issuer, commitment, envOr("WIPE_MODE", wipe.ModeCUDA), llamaURL, kvRequired)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -64,6 +66,26 @@ func main() {
 			http.Error(w, "policy_hash required", http.StatusBadRequest)
 			return
 		}
+
+		var slotsErased []int
+		kvCleared := false
+		if llamaURL != "" {
+			ids, err := wipe.EraseSlots(llamaURL, 15*time.Second)
+			if err != nil {
+				if kvRequired {
+					http.Error(w, "kv erase failed: "+err.Error(), http.StatusInternalServerError)
+					return
+				}
+				log.Printf("kv erase skipped (WIPE_KV_REQUIRED=0): %v", err)
+			} else {
+				slotsErased = ids
+				kvCleared = true
+			}
+		} else if kvRequired {
+			http.Error(w, "LLAMA_URL required for kv erase (set WIPE_KV_REQUIRED=0 to skip)", http.StatusInternalServerError)
+			return
+		}
+
 		if err := wipe.TwoPass(); err != nil {
 			http.Error(w, "wipe failed: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -81,6 +103,8 @@ func main() {
 			PolicyHash:       req.PolicyHash,
 			Nonce:            req.Nonce,
 			WorkerCommitment: commitment,
+			KVCacheCleared:   kvCleared,
+			SlotsErased:      slotsErased,
 			WipedAt:          time.Now().UTC().Format(time.RFC3339),
 			Issuer:           issuer,
 		}

@@ -693,10 +693,21 @@ func checkGPUWiped(pkg map[string]any, opts VerifyOpts) Check {
 		return check
 	}
 
+	if _, present := certRaw["kv_cache_cleared"]; present {
+		if !cert.KVCacheCleared {
+			check.Detail = "kv_cache_cleared is false"
+			return check
+		}
+	}
+
 	check.OK = true
 	check.Detail = "two-pass wipe cert verified"
 	if cert.Method == gpu.MethodDevNoop {
 		check.Detail = "dev-noop wipe cert verified"
+	}
+	if cert.KVCacheCleared {
+		n := len(cert.SlotsErased)
+		check.Detail = fmt.Sprintf("%s; kv cleared (%d slots)", check.Detail, n)
 	}
 	return check
 }

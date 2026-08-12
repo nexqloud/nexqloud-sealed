@@ -40,6 +40,7 @@ func TestWipeWorkerE2EHostBuffer(t *testing.T) {
 		"WIPE_ISSUER_PRIVKEY="+privHex,
 		"WIPE_WORKER_COMMITMENT="+workerCommit,
 		"WIPE_ISSUER_ID=nexqloud-wipe-worker",
+		"WIPE_KV_REQUIRED=0",
 	)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

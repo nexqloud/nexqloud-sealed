@@ -68,6 +68,17 @@ Image: `ghcr.io/nexqloud/nexqloud-sealed/sealed-shim` (workflow: `.github/workfl
 | `v*` | production | `…/sealed-shim:<semver>` |
 | any push | — | `…/sealed-shim:sha-<commit>` |
 
+## Host sidecars (llama / wipe / model-attest)
+
+On the nanoserver, start adjacent containers with
+[`scripts/start-sealed-sidecars.sh`](../scripts/start-sealed-sidecars.sh):
+
+- `sealed-llama` — local GGUF, isolation flags (`-np 1`, `--no-cache-prompt`, …)
+- `sealed-wipe` — CUDA two-pass + llama slot erase (`LLAMA_URL`)
+- `sealed-model-attest` — hashes the same GGUF for receipt model commitment
+
+KV / prompt-cache isolation details: [`docs/kv-isolation.md`](kv-isolation.md).
+
 ## Dev mode
 
 Set `NEXQLOUD_DEV=1` (or `shim --dev`) to allow mock inference, placeholder receipt fields, and test attestation fallbacks. **Production deployments must not set this.**

@@ -32,6 +32,8 @@ type ZeroizationCert struct {
 	PolicyHash       string `json:"policy_hash"`
 	Nonce            string `json:"nonce,omitempty"`
 	WorkerCommitment string `json:"worker_commitment,omitempty"`
+	KVCacheCleared   bool   `json:"kv_cache_cleared,omitempty"`
+	SlotsErased      []int  `json:"slots_erased,omitempty"`
 	WipedAt          string `json:"wiped_at"`
 	Issuer           string `json:"issuer"`
 	Pubkey           string `json:"pubkey"`
