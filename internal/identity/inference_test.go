@@ -71,6 +71,45 @@ func TestVerifyIdentityRequiresHeaderWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestStableClaimDigestIgnoresTimestamps(t *testing.T) {
+	base := jwt.MapClaims{
+		"sub":       "user-1",
+		"tenant_id": "acme",
+		"aud":       "nexqloud-sealed",
+		"iat":       float64(1_700_000_000),
+		"exp":       float64(1_700_000_600),
+	}
+	d1, err := identity.StableClaimDigest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated := jwt.MapClaims{
+		"sub":       "user-1",
+		"tenant_id": "acme",
+		"aud":       "nexqloud-sealed",
+		"iat":       float64(1_700_090_000),
+		"exp":       float64(1_700_090_900),
+	}
+	d2, err := identity.StableClaimDigest(rotated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(d1) != string(d2) {
+		t.Fatalf("digest changed across iat/exp: %x vs %x", d1, d2)
+	}
+	h1, err := identity.CommitmentHash(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h2, err := identity.CommitmentHash(rotated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h1 == h2 {
+		t.Fatal("expected CommitmentHash to change when iat/exp change")
+	}
+}
+
 func TestCommitmentHashDeterministic(t *testing.T) {
 	claims := jwt.MapClaims{
 		"sub":       "user-1",

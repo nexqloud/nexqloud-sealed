@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"strings"
 
@@ -8,8 +9,24 @@ import (
 )
 
 type VerifiedIdentity struct {
-	Claims jwt.MapClaims
-	Hash   string
+	Claims      jwt.MapClaims
+	Hash        string
+	TenantID    string
+	ClaimDigest []byte
+}
+
+func DevIdentity(tenantID string) VerifiedIdentity {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		tenantID = "dev"
+	}
+	sum := sha256.Sum256([]byte("sealed-dek-dev-claim|" + tenantID))
+	digest := make([]byte, len(sum))
+	copy(digest, sum[:])
+	return VerifiedIdentity{
+		TenantID:    tenantID,
+		ClaimDigest: digest,
+	}
 }
 
 func VerifyIdentity(token []byte, jwksURL, tenantID string) (VerifiedIdentity, error) {
@@ -22,11 +39,11 @@ func VerifyIdentity(token []byte, jwksURL, tenantID string) (VerifiedIdentity, e
 		return VerifiedIdentity{}, fmt.Errorf("delete token cannot be used for inference")
 	}
 
+	gotTenant := tenantFromClaims(claims)
 	wantTenant := strings.TrimSpace(tenantID)
 	if wantTenant != "" {
-		got := tenantFromClaims(claims)
-		if got != wantTenant {
-			return VerifiedIdentity{}, fmt.Errorf("tenant_id mismatch: got %q want %q", got, wantTenant)
+		if gotTenant != wantTenant {
+			return VerifiedIdentity{}, fmt.Errorf("tenant_id mismatch: got %q want %q", gotTenant, wantTenant)
 		}
 	}
 
@@ -34,8 +51,17 @@ func VerifyIdentity(token []byte, jwksURL, tenantID string) (VerifiedIdentity, e
 	if err != nil {
 		return VerifiedIdentity{}, err
 	}
+	digest, err := StableClaimDigest(claims)
+	if err != nil {
+		return VerifiedIdentity{}, err
+	}
 
-	return VerifiedIdentity{Claims: claims, Hash: hash}, nil
+	return VerifiedIdentity{
+		Claims:      claims,
+		Hash:        hash,
+		TenantID:    gotTenant,
+		ClaimDigest: digest,
+	}, nil
 }
 
 func parseVerifiedToken(token []byte, jwksURL string) (jwt.MapClaims, error) {

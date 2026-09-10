@@ -18,3 +18,16 @@ func (m *Mock) Complete(req Request) (Response, error) {
 		Model:   model,
 	}, nil
 }
+
+func (m *Mock) CompleteStream(req Request, emit TokenHandler) (Response, error) {
+	out, err := m.Complete(req)
+	if err != nil {
+		return Response{}, err
+	}
+	if emit != nil && out.Content != "" {
+		if err := emit(out.Content); err != nil {
+			return Response{}, err
+		}
+	}
+	return out, nil
+}

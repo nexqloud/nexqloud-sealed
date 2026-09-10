@@ -39,3 +39,9 @@ func Open(dek, blob []byte) ([]byte, error) {
 	ciphertext := blob[nonceSize:]
 	return aead.Open(nil, nonce, ciphertext, nil)
 }
+
+func Zeroize(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}

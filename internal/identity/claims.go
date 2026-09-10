@@ -33,6 +33,31 @@ func CommitmentHash(claims jwt.MapClaims) (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
+type stableCommitment struct {
+	Sub      string `json:"sub,omitempty"`
+	TenantID string `json:"tenant_id,omitempty"`
+	Aud      string `json:"aud,omitempty"`
+}
+
+func StableClaimDigest(claims jwt.MapClaims) ([]byte, error) {
+	c, err := commitmentFromClaims(claims)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(stableCommitment{
+		Sub:      c.Sub,
+		TenantID: c.TenantID,
+		Aud:      c.Aud,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal stable identity commitment: %w", err)
+	}
+	sum := sha256.Sum256(raw)
+	out := make([]byte, len(sum))
+	copy(out, sum[:])
+	return out, nil
+}
+
 func commitmentFromClaims(claims jwt.MapClaims) (Commitment, error) {
 	if claims == nil {
 		return Commitment{}, fmt.Errorf("missing claims")
