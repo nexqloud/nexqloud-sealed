@@ -214,11 +214,17 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	out, err := s.engine.Turn(id, req, nil)
 	if err != nil {
-		s.writeTurnError(w, err)
-		return
+		if out.Content == "" && out.EncryptedPayload == "" {
+			s.writeTurnError(w, err)
+			return
+		}
+		log.Printf("turn failed: %v", err)
 	}
 
 	resp := completionJSON(out)
+	if err != nil {
+		resp["receipt_error"] = err.Error()
+	}
 	s.publishReceipt(out.Receipt)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -245,12 +251,22 @@ func (s *server) streamTurn(w http.ResponseWriter, id identity.VerifiedIdentity,
 		return writeSSE(w, flusher, "token", map[string]string{"content": token})
 	})
 	if err != nil {
-		_ = writeSSE(w, flusher, "error", map[string]string{"error": publicTurnError(err)})
-		return
+		log.Printf("turn failed: %v", err)
+		if out.Content == "" && out.EncryptedPayload == "" {
+			_ = writeSSE(w, flusher, "error", map[string]string{
+				"error":  publicTurnError(err),
+				"detail": err.Error(),
+			})
+			return
+		}
 	}
 
 	s.publishReceipt(out.Receipt)
-	if err := writeSSE(w, flusher, "sealed", completionJSON(out)); err != nil {
+	payload := completionJSON(out)
+	if err != nil {
+		payload["receipt_error"] = err.Error()
+	}
+	if err := writeSSE(w, flusher, "sealed", payload); err != nil {
 		log.Printf("sse sealed: %v", err)
 	}
 }
@@ -353,13 +369,23 @@ func (s *server) writeTurnError(w http.ResponseWriter, err error) {
 }
 
 func publicTurnError(err error) string {
+	if err == nil {
+		return "turn failed"
+	}
 	if chat.IsInvalidPayload(err) {
 		return "invalid encrypted_payload"
 	}
-	if strings.Contains(err.Error(), "missing prompt") {
-		return err.Error()
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "missing prompt"):
+		return msg
+	case strings.Contains(msg, "inference"), strings.Contains(msg, "vllm"):
+		return "inference failed"
+	case strings.Contains(msg, "receipt"), strings.Contains(msg, "attestation"), strings.Contains(msg, "wipe"), strings.Contains(msg, "model-attest"):
+		return "receipt build failed"
+	default:
+		return "turn failed"
 	}
-	return "turn failed"
 }
 
 func (s *server) publishReceipt(sealedReceipt any) {

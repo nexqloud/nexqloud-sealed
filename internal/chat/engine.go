@@ -94,11 +94,24 @@ func (e *Engine) Turn(id identity.VerifiedIdentity, req inference.Request, emit 
 
 	out, err := e.infer(inferReq, emit)
 	if err != nil {
-		return TurnResult{}, err
+		return TurnResult{}, fmt.Errorf("inference: %w", err)
 	}
 
+	st.Messages = append(st.Messages, chatstate.Message{
+		Role:    "assistant",
+		Content: out.Content,
+	})
+
 	if e.Seal == nil {
-		return TurnResult{}, fmt.Errorf("receipt sealer not configured")
+		blob, sealErr := chatstate.Seal(dek, st)
+		if sealErr != nil {
+			return TurnResult{Content: out.Content, Model: out.Model}, fmt.Errorf("receipt sealer not configured")
+		}
+		return TurnResult{
+			Content:          out.Content,
+			Model:            out.Model,
+			EncryptedPayload: blob,
+		}, fmt.Errorf("receipt sealer not configured")
 	}
 	sealed, err := e.Seal(receipt.Input{
 		Prompt:            prompt,
@@ -107,22 +120,31 @@ func (e *Engine) Turn(id identity.VerifiedIdentity, req inference.Request, emit 
 		IdentityClaimHash: id.Hash,
 	})
 	if err != nil {
-		return TurnResult{}, err
+		blob, sealErr := chatstate.Seal(dek, st)
+		if sealErr != nil {
+			return TurnResult{Content: out.Content, Model: out.Model}, fmt.Errorf("receipt: %w", err)
+		}
+		return TurnResult{
+			Content:          out.Content,
+			Model:            out.Model,
+			EncryptedPayload: blob,
+		}, fmt.Errorf("receipt: %w", err)
 	}
 
 	receiptID := ""
 	if sealed != nil {
 		receiptID = sealed.Package.ReceiptID
 	}
-	st.Messages = append(st.Messages, chatstate.Message{
-		Role:      "assistant",
-		Content:   out.Content,
-		ReceiptID: receiptID,
-	})
+	st.Messages[len(st.Messages)-1].ReceiptID = receiptID
 
 	blob, err := chatstate.Seal(dek, st)
 	if err != nil {
-		return TurnResult{}, err
+		return TurnResult{
+			Content:   out.Content,
+			Model:     out.Model,
+			ReceiptID: receiptID,
+			Receipt:   sealed,
+		}, fmt.Errorf("chatstate: %w", err)
 	}
 
 	return TurnResult{

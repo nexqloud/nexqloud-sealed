@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -80,12 +81,17 @@ func readJSON(r io.Reader, fallbackModel string) (Response, error) {
 	if err != nil {
 		return Response{}, err
 	}
+	return parseCompletionJSON(raw, fallbackModel)
+}
+
+func parseCompletionJSON(raw []byte, fallbackModel string) (Response, error) {
 	var parsed struct {
 		Model   string `json:"model"`
 		Choices []struct {
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			Text string `json:"text"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
@@ -98,8 +104,12 @@ func readJSON(r io.Reader, fallbackModel string) (Response, error) {
 	if model == "" {
 		model = fallbackModel
 	}
+	content := parsed.Choices[0].Message.Content
+	if content == "" {
+		content = parsed.Choices[0].Text
+	}
 	return Response{
-		Content: parsed.Choices[0].Message.Content,
+		Content: content,
 		Model:   model,
 	}, nil
 }
@@ -108,10 +118,15 @@ func readStream(r io.Reader, fallbackModel string, emit TokenHandler) (Response,
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	var full strings.Builder
+	var leftover strings.Builder
 	model := fallbackModel
 	for scanner.Scan() {
-		line := scanner.Text()
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "event:") || strings.HasPrefix(line, ":") {
+			continue
+		}
 		if !strings.HasPrefix(line, "data:") {
+			leftover.WriteString(line)
 			continue
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
@@ -124,9 +139,14 @@ func readStream(r io.Reader, fallbackModel string, emit TokenHandler) (Response,
 				Delta struct {
 					Content string `json:"content"`
 				} `json:"delta"`
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+				Text string `json:"text"`
 			} `json:"choices"`
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			leftover.WriteString(payload)
 			continue
 		}
 		if chunk.Model != "" {
@@ -137,17 +157,43 @@ func readStream(r io.Reader, fallbackModel string, emit TokenHandler) (Response,
 		}
 		token := chunk.Choices[0].Delta.Content
 		if token == "" {
+			token = chunk.Choices[0].Text
+		}
+		if token == "" && full.Len() == 0 {
+			token = chunk.Choices[0].Message.Content
+		}
+		if token == "" {
 			continue
 		}
 		full.WriteString(token)
 		if emit != nil {
 			if err := emit(token); err != nil {
-				return Response{}, err
+				if full.Len() > 0 {
+					log.Printf("inference stream emit: %v", err)
+					return Response{Content: full.String(), Model: model}, nil
+				}
+				return Response{}, fmt.Errorf("inference stream: %w", err)
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil && full.Len() == 0 && leftover.Len() == 0 {
+		return Response{}, fmt.Errorf("inference stream: %w", err)
+	}
+	if full.Len() == 0 && leftover.Len() > 0 {
+		out, err := parseCompletionJSON([]byte(leftover.String()), model)
+		if err != nil {
+			if scanner.Err() != nil {
+				return Response{}, fmt.Errorf("inference stream: %w", scanner.Err())
+			}
+			return Response{}, err
+		}
+		if emit != nil && out.Content != "" {
+			_ = emit(out.Content)
+		}
+		return out, nil
+	}
 	if err := scanner.Err(); err != nil {
-		return Response{}, err
+		log.Printf("inference stream ended: %v", err)
 	}
 	return Response{Content: full.String(), Model: model}, nil
 }

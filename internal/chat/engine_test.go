@@ -2,6 +2,7 @@ package chat
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -133,6 +134,30 @@ func TestTurnStreamsTokens(t *testing.T) {
 	}
 	if got.String() != out.Content {
 		t.Fatalf("streamed %q vs %q", got.String(), out.Content)
+	}
+}
+
+func TestTurnReceiptFailureStillEncrypts(t *testing.T) {
+	eng := testEngine(t)
+	eng.Seal = func(in receipt.Input) (*receipt.SealedReceipt, error) {
+		return nil, fmt.Errorf("wipe worker down")
+	}
+	out, err := eng.Turn(testIdentity(), inference.Request{Prompt: "hello"}, nil)
+	if err == nil {
+		t.Fatal("expected receipt error")
+	}
+	if !strings.Contains(err.Error(), "receipt:") {
+		t.Fatalf("err = %v", err)
+	}
+	if out.Content == "" || out.EncryptedPayload == "" {
+		t.Fatalf("expected content and ciphertext after receipt failure: %+v", out)
+	}
+	msgs, err := eng.Decrypt(testIdentity(), out.EncryptedPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 || msgs[0].Content != "hello" || msgs[1].ReceiptID != "" {
+		t.Fatalf("got %+v", msgs)
 	}
 }
 

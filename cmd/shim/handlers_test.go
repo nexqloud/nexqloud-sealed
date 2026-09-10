@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -126,6 +127,26 @@ func TestHandleChatCompletionsStream(t *testing.T) {
 	out := rec.Body.String()
 	if !strings.Contains(out, "event: token") || !strings.Contains(out, "event: sealed") {
 		t.Fatalf("sse missing events: %s", out)
+	}
+}
+
+func TestHandleChatCompletionsReceiptErrorKeepsPayload(t *testing.T) {
+	srv := testHTTPServer(t)
+	srv.engine.Seal = func(in receipt.Input) (*receipt.SealedReceipt, error) {
+		return nil, fmt.Errorf("wipe worker down")
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"prompt":"hello"}`))
+	srv.handleChatCompletions(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["encrypted_payload"] == "" || body["receipt_error"] == nil {
+		t.Fatalf("missing payload or receipt_error: %v", body)
 	}
 }
 
