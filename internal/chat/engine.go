@@ -3,7 +3,9 @@ package chat
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
+	"unicode/utf8"
 
 	"nexqloud-sealed/internal/chatstate"
 	"nexqloud-sealed/internal/derive/kdf"
@@ -63,6 +65,7 @@ func (e *Engine) Decrypt(id identity.VerifiedIdentity, encoded string) ([]chatst
 	if err != nil {
 		return nil, err
 	}
+	logOpenedThread("history", id, encoded, st.Messages)
 	return st.Messages, nil
 }
 
@@ -82,6 +85,7 @@ func (e *Engine) Turn(id identity.VerifiedIdentity, req inference.Request, emit 
 	if err != nil {
 		return TurnResult{}, err
 	}
+	logOpenedThread("turn", id, req.EncryptedPayload, st.Messages)
 
 	st.Messages = append(st.Messages, chatstate.Message{Role: "user", Content: prompt})
 
@@ -107,11 +111,11 @@ func (e *Engine) Turn(id identity.VerifiedIdentity, req inference.Request, emit 
 		if sealErr != nil {
 			return TurnResult{Content: out.Content, Model: out.Model}, fmt.Errorf("receipt sealer not configured")
 		}
-		return TurnResult{
+		return e.finishTurn(id, TurnResult{
 			Content:          out.Content,
 			Model:            out.Model,
 			EncryptedPayload: blob,
-		}, fmt.Errorf("receipt sealer not configured")
+		}, len(st.Messages), fmt.Errorf("receipt sealer not configured"))
 	}
 	sealed, err := e.Seal(receipt.Input{
 		Prompt:            prompt,
@@ -124,11 +128,11 @@ func (e *Engine) Turn(id identity.VerifiedIdentity, req inference.Request, emit 
 		if sealErr != nil {
 			return TurnResult{Content: out.Content, Model: out.Model}, fmt.Errorf("receipt: %w", err)
 		}
-		return TurnResult{
+		return e.finishTurn(id, TurnResult{
 			Content:          out.Content,
 			Model:            out.Model,
 			EncryptedPayload: blob,
-		}, fmt.Errorf("receipt: %w", err)
+		}, len(st.Messages), fmt.Errorf("receipt: %w", err))
 	}
 
 	receiptID := ""
@@ -147,13 +151,13 @@ func (e *Engine) Turn(id identity.VerifiedIdentity, req inference.Request, emit 
 		}, fmt.Errorf("chatstate: %w", err)
 	}
 
-	return TurnResult{
+	return e.finishTurn(id, TurnResult{
 		Content:          out.Content,
 		Model:            out.Model,
 		EncryptedPayload: blob,
 		ReceiptID:        receiptID,
 		Receipt:          sealed,
-	}, nil
+	}, len(st.Messages), nil)
 }
 
 func (e *Engine) infer(req inference.Request, emit inference.TokenHandler) (inference.Response, error) {
@@ -173,6 +177,46 @@ func (e *Engine) infer(req inference.Request, emit inference.TokenHandler) (infe
 		return out, nil
 	}
 	return e.Inference.Complete(req)
+}
+
+func (e *Engine) finishTurn(id identity.VerifiedIdentity, out TurnResult, threadLen int, err error) (TurnResult, error) {
+	LogOutboundReply("turn", id.TenantID, out.Model, out.ReceiptID, out.Content, out.EncryptedPayload, threadLen)
+	return out, err
+}
+
+func logOpenedThread(kind string, id identity.VerifiedIdentity, ciphertext string, msgs []chatstate.Message) {
+	n := len(msgs)
+	bytes := len(strings.TrimSpace(ciphertext))
+	tenant := strings.TrimSpace(id.TenantID)
+	if bytes == 0 {
+		log.Printf("[sealed] decrypt (%s): tenant=%s no ciphertext — new thread (plaintext exists only inside the TEE)", kind, tenant)
+		return
+	}
+	log.Printf("[sealed] decrypt (%s): tenant=%s ciphertext=%dB unsealed inside TEE → %d message(s)", kind, tenant, bytes, n)
+	log.Printf("[sealed] decrypt (%s): DEK derived in-enclave from identity+chip+measurement", kind)
+	if n == 0 {
+		log.Printf("[sealed] decrypt (%s): blob opened but thread is empty", kind)
+		return
+	}
+	for i, m := range msgs {
+		log.Printf("[sealed] decrypt (%s):   #%d %s: %s", kind, i+1, m.Role, clipLog(m.Content, 240))
+	}
+}
+
+func LogOutboundReply(kind, tenant, model, receiptID, content, ciphertext string, threadLen int) {
+	tenant = strings.TrimSpace(tenant)
+	log.Printf("[sealed] reply (%s): tenant=%s model=%s receipt=%s", kind, tenant, model, receiptID)
+	log.Printf("[sealed] reply (%s): sending assistant plaintext to client: %s", kind, clipLog(content, 240))
+	log.Printf("[sealed] reply (%s): re-encrypted %d message(s) → ciphertext=%dB", kind, threadLen, len(strings.TrimSpace(ciphertext)))
+}
+
+func clipLog(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if max <= 0 || utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:max]) + "…"
 }
 
 func toInferenceMessages(msgs []chatstate.Message) []inference.Message {

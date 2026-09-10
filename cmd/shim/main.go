@@ -130,13 +130,13 @@ func envOr(key, fallback string) string {
 
 func selectInferenceBackend() inference.Backend {
 	if url := os.Getenv("VLLM_URL"); url != "" {
-		log.Printf("inference backend: vLLM at %s", url)
+		log.Printf("inference backend: openai-compat at %s (llama.cpp or vLLM)", url)
 		return inference.NewVLLM(url)
 	}
 	if !devmode.Enabled() {
 		log.Fatal("VLLM_URL is required in production (or set NEXQLOUD_DEV=1 for mock inference)")
 	}
-	log.Printf("inference backend: mock (set VLLM_URL to use real vLLM)")
+	log.Printf("inference backend: mock (set VLLM_URL to use llama.cpp or vLLM)")
 	return inference.NewMock()
 }
 
@@ -232,7 +232,9 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(resp); err != nil {
 		log.Printf("encode response: %v", err)
+		return
 	}
+	log.Printf("[sealed] reply (json): flushed completion to client receipt=%s ciphertext=%dB", out.ReceiptID, len(out.EncryptedPayload))
 }
 
 func (s *server) streamTurn(w http.ResponseWriter, id identity.VerifiedIdentity, req inference.Request) {
@@ -268,7 +270,9 @@ func (s *server) streamTurn(w http.ResponseWriter, id identity.VerifiedIdentity,
 	}
 	if err := writeSSE(w, flusher, "sealed", payload); err != nil {
 		log.Printf("sse sealed: %v", err)
+		return
 	}
+	log.Printf("[sealed] reply (stream): flushed sealed SSE event to client receipt=%s ciphertext=%dB", out.ReceiptID, len(out.EncryptedPayload))
 }
 
 func (s *server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
@@ -310,6 +314,7 @@ func (s *server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(map[string]any{"messages": msgs})
+	log.Printf("[sealed] decrypt (history): returning %d plaintext message(s) to client — this is the only hop where history leaves the TEE", len(msgs))
 }
 
 func completionJSON(out chat.TurnResult) map[string]any {

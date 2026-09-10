@@ -7,9 +7,9 @@
 #   export MODEL_ATTEST_ISSUER_PRIVKEY=...
 #   ./scripts/start-sealed-sidecars.sh
 #
-# Backend (pick one):
-#   INFERENCE_BACKEND=llama   # default — local GGUF on :8032 + slot erase for wipe
-#   INFERENCE_BACKEND=vllm    # HF weights on :8033; no /slots erase
+# Backend (pick one — do not run both; wipe needs the GPU):
+#   INFERENCE_BACKEND=llama   # default / production — local GGUF on :8032 + slot erase
+#   INFERENCE_BACKEND=vllm    # optional HF weights on :8033; no /slots erase
 #
 #   ./scripts/start-sealed-sidecars.sh
 #   INFERENCE_BACKEND=vllm ./scripts/start-sealed-sidecars.sh
