@@ -242,6 +242,13 @@ spec:
                 secretKeyRef:
                   name: control-plane
                   key: REGISTRY_TOKEN
+            # The same secret under its client-side name: the coordinator gates its own
+            # routes with SEALED_REGISTRY_TOKEN, and reads the registry with this one.
+            - name: NEXQLOUD_REGISTRY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane
+                  key: REGISTRY_TOKEN
           ports:
             - containerPort: 7003
           securityContext:
