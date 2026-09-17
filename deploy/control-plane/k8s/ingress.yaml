@@ -1,0 +1,51 @@
+# Public names for the erasure control plane, on the *.sealed.dcptunnel.net zone.
+#
+# only what must be reachable from outside is published:
+#   aggregator   — the shim POSTs its destruction receipt here (guest → cluster)
+#   coordinator  — only the gateway calls it, but a public name saves running a port-forward
+#
+# The registry is deliberately NOT here yet: it accepts unauthenticated writes, so it
+# gets a public name only after the shared-secret header is in the code.
+#
+# TLS: cert-manager issues one certificate covering both hosts (letsencrypt-prod is
+# installed cluster-wide). HTTP-01 is solved by ingress-nginx.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sealed-control-plane
+  namespace: sealed-control-plane
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # The coordinator's control port speaks plain HTTP in the cluster; the kill risk
+    # is covered by the customer JWT and the coordinator signature, but this endpoint
+    # should be source-restricted once the gateway has a stable egress IP:
+    # nginx.ingress.kubernetes.io/whitelist-source-range: "<gateway-egress>/32"
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - aggregator.sealed.dcptunnel.net
+        - coordinator.sealed.dcptunnel.net
+      secretName: sealed-control-plane-tls
+  rules:
+    - host: aggregator.sealed.dcptunnel.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: aggregator
+                port:
+                  number: 7004
+    - host: coordinator.sealed.dcptunnel.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: destruction-coordinator
+                port:
+                  number: 7003
