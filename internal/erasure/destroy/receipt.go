@@ -36,8 +36,13 @@ type ReceiptInput struct {
 	KeyVersion      int
 	SaltEpoch       int
 	AttestationJSON []byte
-	Nonce           []byte
-	Evidence        ZeroizationEvidence
+	// The AMD certificate chain (VCEK/ASK/ARK) belonging to AttestationJSON. The
+	// attestation JSON is deliberately report-only (receipt.MarshalAttestation), so the
+	// chain cannot be recovered from it: a caller holding a warmed chain passes it here.
+	// nil falls back to whatever chain the JSON itself carries.
+	CertChain *sevsnp.CertificateChain
+	Nonce     []byte
+	Evidence  ZeroizationEvidence
 }
 
 func BuildReceipt(in ReceiptInput) (destruction.Receipt, error) {
@@ -59,16 +64,16 @@ func BuildReceipt(in ReceiptInput) (destruction.Receipt, error) {
 	}
 
 	pkg := map[string]any{
-		"schema":                Schema,
-		"destruction_id":        in.DestructionID,
-		"operator_id":           in.OperatorID,
-		"tenant_id_hash":        in.TenantIDHash,
-		"seed_commit":           in.SeedCommit,
-		"key_version":           in.KeyVersion,
-		"attestation_hash":      attHash,
-		"zeroization_evidence":  json.RawMessage(evidenceJSON),
-		"salt_epoch":            in.SaltEpoch,
-		"timestamp":             time.Now().UTC().Format(time.RFC3339),
+		"schema":               Schema,
+		"destruction_id":       in.DestructionID,
+		"operator_id":          in.OperatorID,
+		"tenant_id_hash":       in.TenantIDHash,
+		"seed_commit":          in.SeedCommit,
+		"key_version":          in.KeyVersion,
+		"attestation_hash":     attHash,
+		"zeroization_evidence": json.RawMessage(evidenceJSON),
+		"salt_epoch":           in.SaltEpoch,
+		"timestamp":            time.Now().UTC().Format(time.RFC3339),
 	}
 
 	canonical, err := receipt.Canonicalize(pkg)
@@ -95,9 +100,14 @@ func BuildReceipt(in ReceiptInput) (destruction.Receipt, error) {
 
 	att := &sevsnp.Attestation{}
 	if len(in.AttestationJSON) > 0 {
+		// Fallback for callers that carry the chain inside the JSON themselves; the shim's
+		// attestation JSON is report-only, so the chain normally arrives via in.CertChain.
 		if err := protojson.Unmarshal(in.AttestationJSON, att); err == nil {
 			rcpt.CertChain = receipt.EncodeCertificateChain(att.CertificateChain)
 		}
+	}
+	if in.CertChain != nil {
+		rcpt.CertChain = receipt.EncodeCertificateChain(in.CertChain)
 	}
 	return rcpt, nil
 }

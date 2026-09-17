@@ -67,11 +67,28 @@ func enableOperatorSurface(mux *http.ServeMux, srv *server, priv ed25519.Private
 			if err != nil {
 				return destroy.Receipt{}, err
 			}
-			attJSON, err := shimAttestation(pub, nonce)
+			att, err := enclave.RequestReport(pub, nonce)
 			if err != nil {
 				if !devmode.Enabled() {
 					return destroy.Receipt{}, fmt.Errorf("attestation: %w", err)
 				}
+				att = nil
+			}
+			var attJSON []byte
+			if att != nil {
+				// Same hardware evidence as an inference receipt: the report itself, plus the
+				// certificate chain from the warm cache. The attestation JSON is report-only,
+				// so the chain has to travel separately or the proof carries no VCEK.
+				if err := enclave.AttachCertificateChain(att); err != nil {
+					return destroy.Receipt{}, fmt.Errorf("attestation: %w", err)
+				}
+				raw, err := receipt.MarshalAttestation(att)
+				if err != nil {
+					return destroy.Receipt{}, err
+				}
+				attJSON = raw
+			}
+			if attJSON == nil {
 				attJSON = attest.TestAttestationJSON()
 			}
 			input.Priv = priv
@@ -79,7 +96,19 @@ func enableOperatorSurface(mux *http.ServeMux, srv *server, priv ed25519.Private
 			input.OperatorID = operatorID
 			input.Nonce = nonce
 			input.AttestationJSON = attJSON
-			return destroy.BuildReceipt(input)
+			if att != nil {
+				input.CertChain = att.CertificateChain
+			}
+			rcpt, err := destroy.BuildReceipt(input)
+			if err != nil {
+				return destroy.Receipt{}, err
+			}
+			// Same bar as an inference receipt (receipt.Builder): a proof that cannot show a
+			// VCEK is not verifiable as genuine hardware, so do not mint one in production.
+			if rcpt.CertChain.VCEK == "" && !devmode.Enabled() {
+				return destroy.Receipt{}, fmt.Errorf("destruction receipt: attestation missing VCEK certificate")
+			}
+			return rcpt, nil
 		},
 	})
 
@@ -91,21 +120,6 @@ func enableOperatorSurface(mux *http.ServeMux, srv *server, priv ed25519.Private
 		// configured on the coordinator is used instead.
 		CallbackURL: strings.TrimSpace(os.Getenv("NEXQLOUD_CALLBACK_URL")),
 	})
-}
-
-func shimAttestation(pub ed25519.PublicKey, nonce []byte) ([]byte, error) {
-	att, err := enclave.RequestReport(pub, nonce)
-	if err != nil {
-		return nil, err
-	}
-	// The verifier's hardware check needs the VCEK, and the derivation path refuses to
-	// mint a receipt without it. AttachCertificateChain fills the chain from the warm
-	// cache (or AMD KDS) and errors when no VCEK can be attached, so a destruction
-	// receipt can no longer be minted with an unverifiable chain.
-	if err := enclave.AttachCertificateChain(att); err != nil {
-		return nil, err
-	}
-	return receipt.MarshalAttestation(att)
 }
 
 func parseCoordinatorPub(hexPub string) (ed25519.PublicKey, error) {
