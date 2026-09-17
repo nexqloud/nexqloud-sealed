@@ -142,6 +142,11 @@ spec:
                 secretKeyRef:
                   name: control-plane
                   key: SUBSTRATE_KEY_HEX
+            - name: SEALED_REGISTRY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane
+                  key: REGISTRY_TOKEN
           ports:
             - containerPort: 7004
           securityContext:
@@ -150,12 +155,14 @@ spec:
               drop: ["ALL"]
           # No /healthz on this binary yet: a TCP probe is the honest check.
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /healthz
               port: 7004
             initialDelaySeconds: 3
             periodSeconds: 5
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /healthz
               port: 7004
             initialDelaySeconds: 20
             periodSeconds: 20
@@ -211,6 +218,8 @@ spec:
             - http://registry:7001
             - -aggregator
             - http://aggregator:7004
+            - -aggregator-public
+            - https://aggregator.sealed.dcptunnel.net
             - -operators
             - ""
             - -jwks
@@ -228,6 +237,11 @@ spec:
                 secretKeyRef:
                   name: control-plane
                   key: COORDINATOR_KEY_HEX
+            - name: SEALED_REGISTRY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane
+                  key: REGISTRY_TOKEN
           ports:
             - containerPort: 7003
           securityContext:
@@ -235,12 +249,14 @@ spec:
             capabilities:
               drop: ["ALL"]
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /healthz
               port: 7003
             initialDelaySeconds: 3
             periodSeconds: 5
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /healthz
               port: 7003
             initialDelaySeconds: 20
             periodSeconds: 20
