@@ -1,0 +1,246 @@
+# Erasure control plane (invention 3) in Kubernetes: registry + destruction
+# coordinator + destruction aggregator. One image, three roles, selected by the
+# first argument (the entrypoint dispatches).
+#
+# One pair per federation, never per operator node.
+#
+# Coordinator and aggregator keep destruction sessions and per-destruction receipts
+# in memory, so each runs as exactly ONE replica on purpose — a second replica would
+# silently split quorum state and lose proofs.
+#
+# Secrets to create before applying (never commit them):
+#   kubectl -n sealed-control-plane create secret generic control-plane \
+#     --from-literal=MONGO_URL='mongodb://<user>:<pass>@<host>:27017/<db>?tls=true' \
+#     --from-literal=COORDINATOR_KEY_HEX="$(openssl rand -hex 32)" \
+#     --from-literal=SUBSTRATE_KEY_HEX="$(openssl rand -hex 32)" \
+#     --from-literal=JWKS_URL='https://<customer-idp>/.well-known/sealed-jwks.json'
+#   kubectl -n sealed-control-plane create secret docker-registry ghcr-pull \
+#     --docker-server=ghcr.io --docker-username=<user> --docker-password=<token>
+#
+# The images live in a private registry, hence imagePullSecrets.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sealed-control-plane
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry
+  namespace: sealed-control-plane
+spec:
+  selector:
+    app: registry
+  ports:
+    - name: http
+      port: 7001
+      targetPort: 7001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry
+  namespace: sealed-control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: registry
+  template:
+    metadata:
+      labels:
+        app: registry
+    spec:
+      containers:
+        - name: registry
+          image: ghcr.io/nexqloud/nexqloud-sealed/sealed-control-plane:stage
+          args:
+            - registry
+            - -addr
+            - :7001
+            - -mongo
+            - $(MONGO_URL)
+            - -db
+            - sealed_ai
+            - -collection
+            - commitments
+          env:
+            - name: MONGO_URL
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane
+                  key: MONGO_URL
+          ports:
+            - containerPort: 7001
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 7001
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 7001
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aggregator
+  namespace: sealed-control-plane
+spec:
+  selector:
+    app: aggregator
+  ports:
+    - name: http
+      port: 7004
+      targetPort: 7004
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aggregator
+  namespace: sealed-control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aggregator
+  template:
+    metadata:
+      labels:
+        app: aggregator
+    spec:
+      containers:
+        - name: aggregator
+          image: ghcr.io/nexqloud/nexqloud-sealed/sealed-control-plane:stage
+          args:
+            - aggregator
+            - -addr
+            - :7004
+            - -substrate-key-hex
+            - $(SUBSTRATE_KEY_HEX)
+          env:
+            - name: SUBSTRATE_KEY_HEX
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane
+                  key: SUBSTRATE_KEY_HEX
+          ports:
+            - containerPort: 7004
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # No /healthz on this binary yet: a TCP probe is the honest check.
+          readinessProbe:
+            tcpSocket:
+              port: 7004
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 7004
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: destruction-coordinator
+  namespace: sealed-control-plane
+spec:
+  selector:
+    app: destruction-coordinator
+  ports:
+    - name: http
+      port: 7003
+      targetPort: 7003
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: destruction-coordinator
+  namespace: sealed-control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: destruction-coordinator
+  template:
+    metadata:
+      labels:
+        app: destruction-coordinator
+    spec:
+      containers:
+        - name: destruction-coordinator
+          image: ghcr.io/nexqloud/nexqloud-sealed/sealed-control-plane:stage
+          # -operators is intentionally empty: dispatch prefers the callback URL each
+          # deployment registers with its wrap in the registry, and falls back to this
+          # map only for nodes that register none. Fill it in if you need /keyscopes
+          # to reach a node that has never sealed anything yet.
+          args:
+            - coordinator
+            - -addr
+            - :7003
+            - -registry
+            - http://registry:7001
+            - -aggregator
+            - http://aggregator:7004
+            - -operators
+            - ""
+            - -jwks
+            - $(JWKS_URL)
+            - -coordinator-key-hex
+            - $(COORDINATOR_KEY_HEX)
+          env:
+            - name: JWKS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane
+                  key: JWKS_URL
+            - name: COORDINATOR_KEY_HEX
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane
+                  key: COORDINATOR_KEY_HEX
+          ports:
+            - containerPort: 7003
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            tcpSocket:
+              port: 7003
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 7003
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
