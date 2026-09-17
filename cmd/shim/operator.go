@@ -98,6 +98,13 @@ func shimAttestation(pub ed25519.PublicKey, nonce []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The verifier's hardware check needs the VCEK, and the derivation path refuses to
+	// mint a receipt without it. AttachCertificateChain fills the chain from the warm
+	// cache (or AMD KDS) and errors when no VCEK can be attached, so a destruction
+	// receipt can no longer be minted with an unverifiable chain.
+	if err := enclave.AttachCertificateChain(att); err != nil {
+		return nil, err
+	}
 	return receipt.MarshalAttestation(att)
 }
 
