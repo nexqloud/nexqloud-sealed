@@ -18,10 +18,12 @@ func main() {
 	aggregatorURL := flag.String("aggregator", "http://127.0.0.1:7004", "destruction aggregator base URL")
 	aggregatorPublic := flag.String("aggregator-public", "", "aggregator base URL advertised to operator nodes for receipt submission (defaults to -aggregator)")
 	operators := flag.String("operators", "", "operator dispatch map: operator-a=http://host:port,operator-b=...")
+	operatorBase := flag.String("operator-base", "", "public base URL for operator nodes, so an id in the request becomes <base>/v1/d/<id>")
 	addr := flag.String("addr", ":7003", "listen address")
 	jwksURL := flag.String("jwks", "", "customer IdP JWKS URL for delete authorization")
 	coordinatorKeyHex := flag.String("coordinator-key-hex", "", "optional 64-byte Ed25519 coordinator seed hex")
 	flag.Parse()
+	operatorBaseURL = *operatorBase
 
 	reg := registry.NewHTTPClient(*registryURL)
 	operatorURLs := destruction.ParseOperatorURLs(*operators)

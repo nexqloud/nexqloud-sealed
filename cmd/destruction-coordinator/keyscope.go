@@ -13,8 +13,17 @@ import (
 	"nexqloud-sealed/internal/keyscope"
 )
 
+// operatorBaseURL derives an operator's URL from its id as <base>/v1/d/<id>, so a
+// caller that knows the deployment can register a scope without the static map.
+// Set from -operator-base in main.
+var operatorBaseURL string
+
 type createKeyScopeRequest struct {
 	ScopeID string `json:"scope_id"`
+	// Operators names the operator nodes to register. The platform knows them (it just
+	// routed a request to that deployment), and an id-keyed static map goes stale the
+	// moment a deployment is recreated and its endpoint key changes.
+	Operators []string `json:"operators,omitempty"`
 }
 
 type keyScopeRegistration struct {
@@ -65,8 +74,19 @@ func handleCreateKeyScope(operatorURLs map[string]string) http.HandlerFunc {
 			return
 		}
 
-		ops := make([]string, 0, len(operatorURLs))
-		for op := range operatorURLs {
+		// Operators named in the request win over the configured map.
+		urls := operatorURLs
+		if len(req.Operators) > 0 && operatorBaseURL != "" {
+			urls = make(map[string]string, len(req.Operators))
+			for _, id := range req.Operators {
+				if id = strings.TrimSpace(id); id != "" {
+					urls[id] = strings.TrimRight(operatorBaseURL, "/") + "/v1/d/" + id
+				}
+			}
+		}
+
+		ops := make([]string, 0, len(urls))
+		for op := range urls {
 			ops = append(ops, op)
 		}
 		sort.Strings(ops)
@@ -79,7 +99,7 @@ func handleCreateKeyScope(operatorURLs map[string]string) http.HandlerFunc {
 		var seed []byte
 
 		for i, op := range ops {
-			result, err := registerKeyScope(operatorURLs[op], scopeID, seed)
+			result, err := registerKeyScope(urls[op], scopeID, seed)
 			if err != nil {
 				resp.Detail = append(resp.Detail, keyScopeRegistration{OperatorID: op, Error: err.Error()})
 				if len(seed) > 0 {
