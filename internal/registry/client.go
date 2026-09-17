@@ -48,7 +48,17 @@ func (c *HTTPClient) Get(tenantID string) (CommitmentRecord, error) {
 	}
 
 	url := fmt.Sprintf("%s/records/%s", c.BaseURL, tenantID)
-	resp, err := c.HTTPClient.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return CommitmentRecord{}, err
+	}
+	// Reads are gated too (the wraps are the erasure's only remaining copy of the key
+	// material), so this path must carry the same shared secret as the writes. It used
+	// to call HTTPClient.Get directly and silently sent no token.
+	if token := strings.TrimSpace(os.Getenv("NEXQLOUD_REGISTRY_TOKEN")); token != "" {
+		req.Header.Set("X-Sealed-Registry-Token", token)
+	}
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return CommitmentRecord{}, err
 	}
