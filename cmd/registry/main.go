@@ -13,6 +13,7 @@
 //	GET    /records/<tenant>                     the tenant's record
 //	PUT    /records/<tenant>/wraps/<operator>    register/re-seal one operator's wrap
 //	DELETE /records/<tenant>/wraps/<operator>    destroy (zero) one operator's wrap
+//	PUT    /records/<tenant>/callbacks/<operator> record the URL a coordinator can reach that operator on
 //	GET    /healthz                              readiness
 package main
 
@@ -128,6 +129,11 @@ func (s *server) handleRecordByTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if tenantID, operatorID, ok := splitCallbacksPath(path); ok {
+		s.handleCallback(w, r, tenantID, operatorID)
+		return
+	}
+
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -204,6 +210,52 @@ func (s *server) handleWrap(w http.ResponseWriter, r *http.Request, tenantID, op
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// splitCallbacksPath recognises /records/<tenant>/callbacks/<operator>.
+func splitCallbacksPath(path string) (tenantID, operatorID string, ok bool) {
+	tenantID, rest, found := strings.Cut(path, "/callbacks/")
+	if !found || tenantID == "" || rest == "" {
+		return "", "", false
+	}
+	return tenantID, rest, true
+}
+
+// handleCallback records the URL a coordinator can reach one operator node on, so a
+// deployment self-registers instead of being hand-added to a coordinator's operator
+// map.
+func (s *server) handleCallback(w http.ResponseWriter, r *http.Request, tenantID, operatorID string) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		CallbackURL string `json:"callback_url"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.PutCallback(tenantID, operatorID, req.CallbackURL); err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "record not found") {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tenant_id":    tenantID,
+		"operator_id":  operatorID,
+		"callback_url": req.CallbackURL,
+	})
 }
 
 func splitWrapPath(path string) (tenantID, operatorID string, ok bool) {
