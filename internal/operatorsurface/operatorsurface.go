@@ -115,7 +115,18 @@ func handleDestruction(cfg Config) http.HandlerFunc {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			resp, err := http.Post(req.AggregatorSubmitURL, "application/json", bytes.NewReader(payload))
+			submitReq, buildErr := http.NewRequest(http.MethodPost, req.AggregatorSubmitURL, bytes.NewReader(payload))
+			if buildErr != nil {
+				http.Error(w, buildErr.Error(), http.StatusBadGateway)
+				return
+			}
+			submitReq.Header.Set("Content-Type", "application/json")
+			// Same shared secret as the registry: the aggregator gates writes from the
+			// public edge, so receipts must carry it.
+			if token := strings.TrimSpace(os.Getenv("NEXQLOUD_REGISTRY_TOKEN")); token != "" {
+				submitReq.Header.Set("X-Sealed-Registry-Token", token)
+			}
+			resp, err := http.DefaultClient.Do(submitReq)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("submit receipt: %v", err), http.StatusBadGateway)
 				return

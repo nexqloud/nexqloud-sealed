@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"nexqloud-sealed/internal/erasure/destruction"
@@ -75,7 +76,20 @@ func main() {
 	})
 
 	log.Printf("destruction coordinator listening on %s", *addr)
-	log.Fatal(http.ListenAndServe(*addr, mux))
+	// Writes need the shared secret; reads stay open so a destruction proof remains
+	// publicly verifiable. Same header and value as the registry.
+	controlToken := strings.TrimSpace(os.Getenv("SEALED_REGISTRY_TOKEN"))
+	gate := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if controlToken != "" && r.Method != http.MethodGet && r.Header.Get("X-Sealed-Registry-Token") != controlToken {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	log.Fatal(http.ListenAndServe(*addr, gate(mux)))
 }
 
 func handleCreateDestruction(w http.ResponseWriter, r *http.Request, coord *destruction.Coordinator) {
