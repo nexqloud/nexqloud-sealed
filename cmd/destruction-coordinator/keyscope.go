@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -99,6 +100,9 @@ func handleCreateKeyScope(operatorURLs map[string]string) http.HandlerFunc {
 		var seed []byte
 
 		for i, op := range ops {
+			// Log the target before dispatch: a wrong or dead operator URL used to fail
+			// silently and only surfaced much later as "record not found" on delete.
+			log.Printf("keyscope %s: registering with %s at %s", scopeID, op, urls[op])
 			result, err := registerKeyScope(urls[op], scopeID, seed)
 			if err != nil {
 				resp.Detail = append(resp.Detail, keyScopeRegistration{OperatorID: op, Error: err.Error()})

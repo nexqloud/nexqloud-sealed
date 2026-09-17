@@ -225,11 +225,12 @@ spec:
             - http://aggregator:7004
             - -aggregator-public
             - https://aggregator.sealed.dcptunnel.net
+            # Empty on purpose: the gateway names the operator (the deployment's endpoint
+            # key) in the /keyscopes request and the coordinator derives its URL from
+            # -operator-base, so nothing here goes stale on a redeploy. A non-empty map is
+            # the fallback for callers that send no operator at all.
             - -operators
-            # Keyed by deployment id, so it goes stale every time a deployment is recreated
-            # (the endpoint key changes). Until the coordinator takes the operator from the
-            # request instead, this line has to be updated on each redeploy.
-            - 9b1ad2efd1a4=https://dai-dev.dcptunnel.net:8080/v1/d/9b1ad2efd1a4
+            - ""
             - -jwks
             - $(JWKS_URL)
             - -coordinator-key-hex
