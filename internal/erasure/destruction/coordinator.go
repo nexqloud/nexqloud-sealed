@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -174,6 +175,12 @@ func (c *Coordinator) registerWithAggregator(ctx context.Context, session Sessio
 
 	url := c.Aggregator + "/destructions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err == nil {
+		// The aggregator gates writes with the same shared secret as the registry.
+		if token := strings.TrimSpace(os.Getenv("NEXQLOUD_REGISTRY_TOKEN")); token != "" {
+			req.Header.Set("X-Sealed-Registry-Token", token)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -320,6 +327,11 @@ func (c *Coordinator) notifyAggregatorExclusion(ctx context.Context, destruction
 	}
 	url := fmt.Sprintf("%s/destructions/%s/exclusions", c.Aggregator, destructionID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err == nil {
+		if token := strings.TrimSpace(os.Getenv("NEXQLOUD_REGISTRY_TOKEN")); token != "" {
+			req.Header.Set("X-Sealed-Registry-Token", token)
+		}
+	}
 	if err != nil {
 		return err
 	}
