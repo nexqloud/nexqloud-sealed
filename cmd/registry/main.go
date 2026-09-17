@@ -81,6 +81,11 @@ func main() {
 				return
 			}
 			if r.Header.Get("X-Sealed-Registry-Token") != registryToken {
+				// Say who was refused: without this a 401 is unattributable, which is
+				// exactly the kind of thing that costs an afternoon.
+				log.Printf("registry: rejected %s %s from %s (x-forwarded-for %q, ua %q)",
+					r.Method, r.URL.Path, r.RemoteAddr,
+					r.Header.Get("X-Forwarded-For"), r.Header.Get("User-Agent"))
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
