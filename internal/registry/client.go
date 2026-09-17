@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -132,6 +133,12 @@ func (c *HTTPClient) do(method, url string, payload []byte) error {
 	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	// A registry behind the public edge requires the shared secret. Read from the
+	// environment so every client (shim, coordinator, tests) picks it up without a
+	// construction-site change.
+	if token := strings.TrimSpace(os.Getenv("NEXQLOUD_REGISTRY_TOKEN")); token != "" {
+		req.Header.Set("X-Sealed-Registry-Token", token)
 	}
 
 	resp, err := c.HTTPClient.Do(req)

@@ -15,6 +15,7 @@ import (
 func main() {
 	registryURL := flag.String("registry", "http://127.0.0.1:7001", "federated registry base URL")
 	aggregatorURL := flag.String("aggregator", "http://127.0.0.1:7004", "destruction aggregator base URL")
+	aggregatorPublic := flag.String("aggregator-public", "", "aggregator base URL advertised to operator nodes for receipt submission (defaults to -aggregator)")
 	operators := flag.String("operators", "", "operator dispatch map: operator-a=http://host:port,operator-b=...")
 	addr := flag.String("addr", ":7003", "listen address")
 	jwksURL := flag.String("jwks", "", "customer IdP JWKS URL for delete authorization")
@@ -24,6 +25,7 @@ func main() {
 	reg := registry.NewHTTPClient(*registryURL)
 	operatorURLs := destruction.ParseOperatorURLs(*operators)
 	coord := destruction.NewCoordinator(reg, *aggregatorURL, operatorURLs)
+	coord.AggregatorPublic = *aggregatorPublic
 	if *jwksURL != "" {
 		sk, err := destruction.LoadCoordinatorKey(*coordinatorKeyHex)
 		if err != nil {
@@ -39,6 +41,12 @@ func main() {
 	// Substrate-side scope registration: the platform asks for a conversation key
 	// scope and every operator seals the same seed, without the caller ever holding
 	// it or knowing operator addresses.
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+
 	mux.HandleFunc("/keyscopes", handleCreateKeyScope(operatorURLs))
 	mux.HandleFunc("/destructions", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

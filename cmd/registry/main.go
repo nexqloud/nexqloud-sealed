@@ -69,8 +69,27 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("/records", srv.handleRecords)
-	mux.HandleFunc("/records/", srv.handleRecordByTenant)
+	// The registry can be published behind the public edge (operator nodes have to
+	// reach it), so it can require a shared secret. Reads are gated too: the wraps it
+	// holds are the erasure's only copy of the key material. /healthz stays open for
+	// probes. (A constant-time compare is the next hardening step here.)
+	registryToken := strings.TrimSpace(os.Getenv("SEALED_REGISTRY_TOKEN"))
+	requireToken := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if registryToken == "" {
+				next(w, r)
+				return
+			}
+			if r.Header.Get("X-Sealed-Registry-Token") != registryToken {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next(w, r)
+		}
+	}
+
+	mux.HandleFunc("/records", requireToken(srv.handleRecords))
+	mux.HandleFunc("/records/", requireToken(srv.handleRecordByTenant))
 
 	httpServer := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 

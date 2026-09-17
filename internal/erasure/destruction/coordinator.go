@@ -36,13 +36,17 @@ type Session struct {
 }
 
 type Coordinator struct {
-	Registry       registry.Client
-	Aggregator     string
-	OperatorURL    map[string]string
-	HTTPClient     *http.Client
-	JWKSURL        string
-	CoordinatorSK  ed25519.PrivateKey
-	FailureHandler *FailureHandler
+	Registry   registry.Client
+	Aggregator string
+	// AggregatorPublic is the aggregator base URL handed to operator nodes (they POST
+	// their receipts there). It must be reachable from the guest, so it differs from
+	// Aggregator whenever the aggregator is behind an ingress. Empty = use Aggregator.
+	AggregatorPublic string
+	OperatorURL      map[string]string
+	HTTPClient       *http.Client
+	JWKSURL          string
+	CoordinatorSK    ed25519.PrivateKey
+	FailureHandler   *FailureHandler
 
 	mu       sync.RWMutex
 	sessions map[string]Session
@@ -188,6 +192,16 @@ func (c *Coordinator) registerWithAggregator(ctx context.Context, session Sessio
 	return nil
 }
 
+// publicAggregator is the base URL operator nodes submit their receipts to. It
+// differs from the internal Aggregator whenever the aggregator sits behind an
+// ingress: guests cannot resolve an in-cluster service name.
+func (c *Coordinator) publicAggregator() string {
+	if strings.TrimSpace(c.AggregatorPublic) != "" {
+		return strings.TrimRight(c.AggregatorPublic, "/")
+	}
+	return c.Aggregator
+}
+
 // operatorBaseURL resolves where to dispatch a destruction for one operator: first
 // the callback URL the node registered alongside its wrap, then the static operator
 // map. The registered URL wins so a deployment can be reached through the public
@@ -223,7 +237,7 @@ func (c *Coordinator) dispatchToOperator(ctx context.Context, session Session, o
 		KeyVersion:          session.KeyVersion,
 		SeedCommit:          session.SeedCommit,
 		OperatorID:          operatorID,
-		AggregatorSubmitURL: fmt.Sprintf("%s/destructions/%s/receipts", c.Aggregator, session.DestructionID),
+		AggregatorSubmitURL: fmt.Sprintf("%s/destructions/%s/receipts", c.publicAggregator(), session.DestructionID),
 		CustomerSig:         customerSig,
 	}
 	if len(c.CoordinatorSK) == ed25519.PrivateKeySize {
