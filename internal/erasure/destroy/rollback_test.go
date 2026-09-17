@@ -10,12 +10,18 @@ func TestAntiRollbackZeroizesChipAndRotatesSalt(t *testing.T) {
 	chip := []byte("chip-secret-32-bytes-long!!!!!!")
 	path := t.TempDir() + "/federation_salt.json"
 
-	epoch1, err := destroy.AntiRollback(chip, path)
+	roll, err := destroy.AntiRollback(chip, path, "acme", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if epoch1 < 2 {
-		t.Fatalf("expected rotated epoch >= 2, got %d", epoch1)
+	if roll.PreviousEpoch != 1 || roll.SaltEpoch < 2 {
+		t.Fatalf("expected salt epoch 1 -> >=2, got %d -> %d", roll.PreviousEpoch, roll.SaltEpoch)
+	}
+	if !roll.ChipZeroized {
+		t.Fatal("anti-rollback did not report the chip material as zeroized")
+	}
+	if roll.MarkLogIndex != "" {
+		t.Fatalf("unsigned mark must not produce a log index, got %q", roll.MarkLogIndex)
 	}
 	for _, b := range chip {
 		if b != 0 {
@@ -23,11 +29,17 @@ func TestAntiRollbackZeroizesChipAndRotatesSalt(t *testing.T) {
 		}
 	}
 
-	epoch2, err := destroy.AntiRollback(make([]byte, 32), path)
+	roll2, err := destroy.AntiRollback(make([]byte, 32), path, "acme", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if epoch2 != epoch1+1 {
-		t.Fatalf("epoch2=%d epoch1=%d", epoch2, epoch1)
+	if roll2.SaltEpoch != roll.SaltEpoch+1 {
+		t.Fatalf("epoch2=%d epoch1=%d", roll2.SaltEpoch, roll.SaltEpoch)
+	}
+}
+
+func TestAntiRollbackRejectsMissingChipSecret(t *testing.T) {
+	if _, err := destroy.AntiRollback(nil, t.TempDir()+"/federation_salt.json", "acme", nil); err == nil {
+		t.Fatal("expected an error for a missing chip secret")
 	}
 }

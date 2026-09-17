@@ -3,13 +3,14 @@ package destroy
 import (
 	"crypto/ed25519"
 	"fmt"
+	"log"
 	"path/filepath"
 
+	"nexqloud-sealed/internal/derive/material"
+	"nexqloud-sealed/internal/derive/state"
 	"nexqloud-sealed/internal/erasure/destruction"
 	"nexqloud-sealed/internal/identity"
 	"nexqloud-sealed/internal/registry"
-	"nexqloud-sealed/internal/rootsecret"
-	"nexqloud-sealed/internal/derive/state"
 )
 
 type Receipt = destruction.Receipt
@@ -24,6 +25,13 @@ type RuntimeConfig struct {
 	ChipSecret     func() ([]byte, error)
 	Attestation    func(pub ed25519.PublicKey, nonce []byte) ([]byte, error)
 	SignReceipt    func(input ReceiptInput) (Receipt, error)
+	// MarkSigner is the operator key used to sign the anti-rollback
+	// DestructionMark that is written to the transparency log. Optional: when it
+	// is unset the destruction still completes, but the roll is not published.
+	MarkSigner ed25519.PrivateKey
+	// DestroyRegistryWrap zeroes the registry-held wrap for a tenant. Set by the
+	// operator so a destruction survives a restart; nil skips the step.
+	DestroyRegistryWrap func(tenantID string) error
 }
 
 var runtime RuntimeConfig
@@ -50,7 +58,7 @@ func Destroy(req destruction.SignedDestroyReq, tenantID string) (Receipt, error)
 	if err != nil {
 		return Receipt{}, err
 	}
-	wrapEvidence := evidenceOf(wrap)
+	wrapEvidence := evidenceOf(wrap) // hash of the material that is about to be erased
 
 	chipSecret, err := chipSecretForDestroy()
 	if err != nil {
@@ -61,27 +69,57 @@ func Destroy(req destruction.SignedDestroyReq, tenantID string) (Receipt, error)
 		zeroize(seed)
 	}
 	zeroize(wrap)
+	keyMaterialErased := allZero(wrap)
 
 	randomBytes := make([]byte, 64)
 	if _, err := randRead(randomBytes); err != nil {
 		return Receipt{}, err
 	}
+	// Each evidence flag below is measured after the write rather than asserted:
+	// a receipt that claims zeroization has to show the material is actually gone.
 	ciphertextOverwritten := overwriteCiphertext(tenantID, randomBytes) == nil
+	storeOverwritten := true
 	if store := runtime.LocalStore; store != nil {
-		_ = store.OverwriteWrap(tenantID, randomBytes)
+		storeOverwritten = store.OverwriteWrap(tenantID, randomBytes) == nil
 	}
 
 	saltPath := runtime.SaltPath
 	if saltPath == "" {
 		saltPath = filepath.Join(stateDir(), "federation_salt.json")
 	}
-	saltEpoch, err := AntiRollback(chipSecret, saltPath)
+	roll, err := AntiRollback(chipSecret, saltPath, tenantID, runtime.MarkSigner)
 	if err != nil {
 		return Receipt{}, err
 	}
+	if roll.MarkLogIndex != "" {
+		log.Printf("destruction %s anti-rollback: salt epoch %d -> %d, mark log_index=%s",
+			req.DestructionID, roll.PreviousEpoch, roll.SaltEpoch, roll.MarkLogIndex)
+	}
+	if !keyMaterialErased || !roll.ChipZeroized {
+		return Receipt{}, fmt.Errorf("key material was not zeroized")
+	}
+	if roll.SaltEpoch <= roll.PreviousEpoch {
+		return Receipt{}, fmt.Errorf("anti-rollback did not roll the federation salt (epoch %d)", roll.SaltEpoch)
+	}
 
-	evidence := NewZeroizationEvidence(wrapEvidence, ciphertextOverwritten, true, true)
-	return newReceipt(req, TenantIDHash(tenantID), saltEpoch, evidence)
+	// Last step, once everything else succeeded: make the erasure durable in the
+	// registry as well. Without this an operator restart refetches the wrap and the
+	// key material is recoverable again, which would make the receipt a lie.
+	if runtime.DestroyRegistryWrap != nil {
+		if err := runtime.DestroyRegistryWrap(tenantID); err != nil {
+			return Receipt{}, fmt.Errorf("destroy registry wrap: %w", err)
+		}
+	} else {
+		log.Printf("destruction %s: no registry wrap destroyer configured — the registry copy was NOT erased", req.DestructionID)
+	}
+
+	evidence := NewZeroizationEvidence(
+		wrapEvidence,
+		ciphertextOverwritten && storeOverwritten,
+		keyMaterialErased && roll.ChipZeroized,
+		roll.SaltEpoch > roll.PreviousEpoch,
+	)
+	return newReceipt(req, TenantIDHash(tenantID), roll.SaltEpoch, evidence)
 }
 
 func verifyCustomerSig(customerSig []byte, tenantID string) error {
@@ -129,7 +167,9 @@ func chipSecretForDestroy() ([]byte, error) {
 	if runtime.ChipSecret != nil {
 		return runtime.ChipSecret()
 	}
-	return rootsecret.Chip()
+	// material.Chip resolves the dev chip in dev mode and the real SNP derived key
+	// in production, so the operator binary is runnable locally without a TEE.
+	return material.Chip()
 }
 
 func stateDir() string {
