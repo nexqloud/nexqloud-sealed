@@ -25,6 +25,8 @@ type Client interface {
 type Writer interface {
 	PutWrap(tenantID, operatorID string, wrap []byte, seedCommit string) error
 	DestroyWrap(tenantID, operatorID string) error
+	// PutCallback records how a coordinator can reach an operator node.
+	PutCallback(tenantID, operatorID, callbackURL string) error
 }
 
 type HTTPClient struct {
@@ -101,6 +103,22 @@ func (c *HTTPClient) DestroyWrap(tenantID, operatorID string) error {
 
 func (c *HTTPClient) wrapURL(tenantID, operatorID string) string {
 	return fmt.Sprintf("%s/records/%s/wraps/%s", c.BaseURL, tenantID, operatorID)
+}
+
+// PutCallback records the URL a coordinator can reach one operator node on.
+func (c *HTTPClient) PutCallback(tenantID, operatorID, callbackURL string) error {
+	if tenantID == "" || operatorID == "" {
+		return fmt.Errorf("tenant_id and operator_id are required")
+	}
+	if strings.TrimSpace(callbackURL) == "" {
+		return fmt.Errorf("callback url is required")
+	}
+	payload, err := json.Marshal(map[string]any{"callback_url": callbackURL})
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/records/%s/callbacks/%s", c.BaseURL, tenantID, operatorID)
+	return c.do(http.MethodPut, url, payload)
 }
 
 func (c *HTTPClient) do(method, url string, payload []byte) error {

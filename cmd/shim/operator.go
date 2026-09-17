@@ -87,6 +87,9 @@ func enableOperatorSurface(mux *http.ServeMux, srv *server, priv ed25519.Private
 		Registry:   regClient,
 		OperatorID: operatorID,
 		StateDir:   stateDir,
+		// How a coordinator reaches this deployment; empty means the operator map
+		// configured on the coordinator is used instead.
+		CallbackURL: strings.TrimSpace(os.Getenv("NEXQLOUD_CALLBACK_URL")),
 	})
 }
 

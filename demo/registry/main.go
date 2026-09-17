@@ -70,6 +70,11 @@ func (s *server) handleRecordByTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if tenantID, operatorID, ok := splitCallbacksPath(path); ok {
+		s.handleCallback(w, r, tenantID, operatorID)
+		return
+	}
+
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -102,6 +107,42 @@ func splitWrapPath(path string) (tenantID, operatorID string, ok bool) {
 		return "", "", false
 	}
 	return tenantID, rest, true
+}
+
+// splitCallbacksPath recognises /records/<tenant>/callbacks/<operator>.
+func splitCallbacksPath(path string) (tenantID, operatorID string, ok bool) {
+	tenantID, rest, found := strings.Cut(path, "/callbacks/")
+	if !found || tenantID == "" || rest == "" {
+		return "", "", false
+	}
+	return tenantID, rest, true
+}
+
+// handleCallback records the URL a coordinator can reach one operator node on, so
+// a deployment self-registers instead of being hand-added to an operator map.
+func (s *server) handleCallback(w http.ResponseWriter, r *http.Request, tenantID, operatorID string) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		CallbackURL string `json:"callback_url"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.PutCallback(tenantID, operatorID, req.CallbackURL); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleWrap is the mutation surface of the registry: PUT registers an

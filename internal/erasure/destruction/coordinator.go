@@ -36,12 +36,12 @@ type Session struct {
 }
 
 type Coordinator struct {
-	Registry      registry.Client
-	Aggregator    string
-	OperatorURL   map[string]string
-	HTTPClient    *http.Client
-	JWKSURL       string
-	CoordinatorSK ed25519.PrivateKey
+	Registry       registry.Client
+	Aggregator     string
+	OperatorURL    map[string]string
+	HTTPClient     *http.Client
+	JWKSURL        string
+	CoordinatorSK  ed25519.PrivateKey
 	FailureHandler *FailureHandler
 
 	mu       sync.RWMutex
@@ -188,9 +188,28 @@ func (c *Coordinator) registerWithAggregator(ctx context.Context, session Sessio
 	return nil
 }
 
-func (c *Coordinator) dispatchToOperator(ctx context.Context, session Session, operatorID string, customerSig []byte) DispatchResult {
+// operatorBaseURL resolves where to dispatch a destruction for one operator: first
+// the callback URL the node registered alongside its wrap, then the static operator
+// map. The registered URL wins so a deployment can be reached through the public
+// edge (https://<edge>/v1/d/<endpoint>) without editing the coordinator's config.
+func (c *Coordinator) operatorBaseURL(ctx context.Context, tenantID, operatorID string) (string, bool) {
+	if c.Registry != nil && tenantID != "" {
+		if record, err := c.Registry.Get(tenantID); err == nil {
+			if registered := strings.TrimSpace(record.Callbacks[operatorID]); registered != "" {
+				return registered, true
+			}
+		}
+	}
 	baseURL, ok := c.OperatorURL[operatorID]
 	if !ok || strings.TrimSpace(baseURL) == "" {
+		return "", false
+	}
+	return baseURL, true
+}
+
+func (c *Coordinator) dispatchToOperator(ctx context.Context, session Session, operatorID string, customerSig []byte) DispatchResult {
+	baseURL, ok := c.operatorBaseURL(ctx, session.TenantID, operatorID)
+	if !ok {
 		return DispatchResult{
 			OperatorID: operatorID,
 			Status:     "skipped",

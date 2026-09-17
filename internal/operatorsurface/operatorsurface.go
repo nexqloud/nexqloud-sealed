@@ -46,14 +46,37 @@ type Config struct {
 	// StateDir holds the node's local wrap cache and ciphertext files that a
 	// destruction overwrites.
 	StateDir string
+	// CallbackURL is how a coordinator can reach this node to dispatch a
+	// destruction (e.g. https://<edge>/v1/d/<endpoint>). It is registered with the
+	// node's wrap so the coordinator can address deployments without a
+	// hand-maintained operator map.
+	CallbackURL string
 }
 
 // Register attaches the operator surface to a mux.
+//
+// The surface is served twice: at the bare paths, and under /v1. The public edge
+// rewrites /v1/d/<endpoint>/X to /v1/X before the request reaches the shim, so a
+// coordinator addressing a deployment as https://<edge>/v1/d/<endpoint> ends up on
+// the /v1 aliases. Serving both means one binary works standalone and behind the
+// edge with no edge change.
 func Register(mux *http.ServeMux, cfg Config) {
-	mux.HandleFunc("/destruction", handleDestruction(cfg))
-	mux.HandleFunc("/keyscope", handleKeyScope(cfg))
-	mux.HandleFunc("/keyscope/", handleKeyScopeStatus(cfg))
+	for _, prefix := range []string{"", "/v1"} {
+		mux.HandleFunc(prefix+"/destruction", handleDestruction(cfg))
+		mux.HandleFunc(prefix+"/keyscope", handleKeyScope(cfg))
+		mux.HandleFunc(prefix+"/keyscope/", handleKeyScopeStatus(cfg))
+	}
 	log.Printf("operator surface enabled as %q (registry %s)", cfg.OperatorID, cfg.Registry.BaseURL)
+}
+
+// scopeIDFromPath strips whichever surface prefix the request arrived on.
+func scopeIDFromPath(path string) string {
+	for _, prefix := range []string{"/v1/keyscope/", "/keyscope/"} {
+		if strings.HasPrefix(path, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(path, prefix))
+		}
+	}
+	return ""
 }
 
 // handleDestruction is the endpoint the destruction coordinator dispatches to. The
@@ -192,6 +215,14 @@ func handleKeyScope(cfg Config) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
+		// Record how this node can be reached, so the coordinator does not need a
+		// hand-maintained operator map. Best effort: a scope with material but no
+		// callback still destroys correctly when the map is configured.
+		if cfg.CallbackURL != "" {
+			if err := cfg.Registry.PutCallback(scopeID, cfg.OperatorID, cfg.CallbackURL); err != nil {
+				log.Printf("keyscope %s: could not register callback url for %s: %v", scopeID, cfg.OperatorID, err)
+			}
+		}
 
 		resp := keyScopeResponse{
 			ScopeID:    scopeID,
@@ -229,7 +260,7 @@ type keyScopeStatus struct {
 // been destroyed. The record is shared, so every node reports the same view.
 func handleKeyScopeStatus(cfg Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		scopeID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/keyscope/"))
+		scopeID := scopeIDFromPath(r.URL.Path)
 		if scopeID == "" {
 			http.Error(w, "scope_id is required", http.StatusBadRequest)
 			return

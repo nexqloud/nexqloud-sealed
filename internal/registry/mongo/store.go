@@ -37,6 +37,7 @@ type document struct {
 	KeyVersion int                  `bson:"key_version"`
 	SeedCommit string               `bson:"seed_commit"`
 	Wraps      map[string]string    `bson:"wraps"` // base64; "" marks a destroyed slot
+	Callbacks  map[string]string    `bson:"callbacks,omitempty"`
 	Destroyed  map[string]time.Time `bson:"destroyed_at,omitempty"`
 	UpdatedAt  time.Time            `bson:"updated_at"`
 }
@@ -101,6 +102,7 @@ func (s *Store) Get(tenantID string) (registry.CommitmentRecord, bool, error) {
 		KeyVersion: d.KeyVersion,
 		SeedCommit: d.SeedCommit,
 		Wraps:      make(map[string][]byte, len(d.Wraps)),
+		Callbacks:  d.Callbacks,
 	}
 	for op, encoded := range d.Wraps {
 		if encoded == "" {
@@ -186,6 +188,37 @@ func (s *Store) PutWrap(tenantID, operatorID string, wrap []byte, seedCommit str
 			return fmt.Errorf("%w for tenant %q", ErrSeedCommitConflict, tenantID)
 		}
 		return err
+	}
+	return nil
+}
+
+// PutCallback records how a coordinator can reach one operator node for this scope.
+func (s *Store) PutCallback(tenantID, operatorID, callbackURL string) error {
+	if strings.TrimSpace(tenantID) == "" {
+		return fmt.Errorf("tenant_id is required")
+	}
+	if err := validField(operatorID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(callbackURL) == "" {
+		return fmt.Errorf("callback url is required")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+
+	result, err := s.coll.UpdateOne(ctx,
+		bson.M{"tenant_id": tenantID},
+		bson.M{"$set": bson.M{
+			"callbacks." + operatorID: callbackURL,
+			"updated_at":              time.Now().UTC(),
+		}},
+	)
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("record not found for tenant %q", tenantID)
 	}
 	return nil
 }

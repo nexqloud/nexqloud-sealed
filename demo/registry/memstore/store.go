@@ -85,6 +85,31 @@ func (s *Store) PutWrap(tenantID, operatorID string, wrap []byte, seedCommit str
 	return nil
 }
 
+// PutCallback records how a coordinator can reach one operator node for this scope.
+func (s *Store) PutCallback(tenantID, operatorID, callbackURL string) error {
+	if tenantID == "" || operatorID == "" {
+		return fmt.Errorf("tenant_id and operator_id are required")
+	}
+	if callbackURL == "" {
+		return fmt.Errorf("callback url is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record, ok := s.records[tenantID]
+	if !ok {
+		return fmt.Errorf("record not found for tenant %q", tenantID)
+	}
+	if record.Callbacks == nil {
+		record.Callbacks = make(map[string]string)
+	}
+	record.Callbacks[operatorID] = callbackURL
+
+	s.records[tenantID] = record
+	return nil
+}
+
 // DestroyWrap zeroes one operator's wrap while keeping its slot in the record.
 //
 // Keeping the slot matters twice over: a later derivation can tell "destroyed"
