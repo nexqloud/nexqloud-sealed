@@ -54,6 +54,8 @@ spec:
       containers:
         - name: registry
           image: ghcr.io/nexqloud/nexqloud-sealed/sealed-control-plane:stage
+          # Mutable tag: without Always a rollout silently reuses the cached image.
+          imagePullPolicy: Always
           args:
             - registry
             - -addr
@@ -126,6 +128,8 @@ spec:
       containers:
         - name: aggregator
           image: ghcr.io/nexqloud/nexqloud-sealed/sealed-control-plane:stage
+          # Mutable tag: without Always a rollout silently reuses the cached image.
+          imagePullPolicy: Always
           args:
             - aggregator
             - -addr
@@ -193,6 +197,8 @@ spec:
       containers:
         - name: destruction-coordinator
           image: ghcr.io/nexqloud/nexqloud-sealed/sealed-control-plane:stage
+          # Mutable tag: without Always a rollout silently reuses the cached image.
+          imagePullPolicy: Always
           # -operators is intentionally empty: dispatch prefers the callback URL each
           # deployment registers with its wrap in the registry, and falls back to this
           # map only for nodes that register none. Fill it in if you need /keyscopes
