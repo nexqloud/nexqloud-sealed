@@ -147,6 +147,11 @@ spec:
                 secretKeyRef:
                   name: control-plane
                   key: REGISTRY_TOKEN
+            - name: NEXQLOUD_REGISTRY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane
+                  key: REGISTRY_TOKEN
           ports:
             - containerPort: 7004
           securityContext:
@@ -221,7 +226,10 @@ spec:
             - -aggregator-public
             - https://aggregator.sealed.dcptunnel.net
             - -operators
-            - ""
+            # Keyed by deployment id, so it goes stale every time a deployment is recreated
+            # (the endpoint key changes). Until the coordinator takes the operator from the
+            # request instead, this line has to be updated on each redeploy.
+            - 9b1ad2efd1a4=https://dai-dev.dcptunnel.net:8080/v1/d/9b1ad2efd1a4
             - -jwks
             - $(JWKS_URL)
             - -coordinator-key-hex
