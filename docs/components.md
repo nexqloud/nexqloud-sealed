@@ -25,13 +25,14 @@ This document classifies every deployable binary and major package so demo scaff
 | `destruction-aggregator` | 3 | **prod** | Collect operator destruction receipts → unified proof |
 | `verify` | 2 | **tooling** | CLI verifier for inference / derivation receipts |
 | `sealed-verify-deletion` | 3 | **tooling** | CLI verifier for destruction proofs |
+| `registry` | 1 | **prod** | Federated key-derivation registry (MongoDB-backed); one per federation |
 
 ## Demo (`demo/`)
 
 | Binary / script | Replaced in production by |
 |-----------------|---------------------------|
 | `demo/mock-idp` | Customer IdP JWKS |
-| `demo/registry` + `demo/registry/memstore` | Persistent registry service |
+| `demo/registry` + `demo/registry/memstore` | `cmd/registry` (MongoDB-backed, same routes) |
 | `demo/bootstrap` | Tenant onboarding API / ops workflow |
 | `demo/two-vm/` | Internal staging / sales demos only |
 
@@ -78,6 +79,21 @@ On the nanoserver, start adjacent containers with
 - `sealed-model-attest` — hashes the same GGUF for receipt model commitment
 
 KV / prompt-cache isolation details: [`docs/kv-isolation.md`](kv-isolation.md).
+
+## Erasure control plane (invention 3)
+
+Coordinator, aggregator and registry ship as one image, `sealed-control-plane`, with the role
+passed as the first argument (`registry` | `coordinator` | `aggregator`). None of them needs a TEE
+or holds key material. Build with `make image-control-plane`; run recipes, required flags and the
+connectivity the deployment must satisfy are in [`deploy/control-plane/README.md`](../deploy/control-plane/README.md).
+
+One coordinator + one aggregator + one registry serve the whole federation — never one per operator
+node. A per-node coordinator would resolve a quorum of one and publish a proof that leaves every other
+node's copy of the key material intact.
+
+Shims join the quorum when deployed with `NEXQLOUD_REGISTRY_URL`, `NEXQLOUD_OPERATOR_ID`,
+`NEXQLOUD_COORDINATOR_PUB_HEX` and a writable `NEXQLOUD_STATE_DIR`; without them they behave exactly as
+before.
 
 ## Dev mode
 

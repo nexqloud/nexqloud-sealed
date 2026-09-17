@@ -1,0 +1,128 @@
+name: erasure control plane image
+
+on:
+  push:
+    branches: [main, stage]
+    tags: ["v*"]
+    paths:
+      - "cmd/registry/**"
+      - "cmd/destruction-coordinator/**"
+      - "cmd/destruction-aggregator/**"
+      - "internal/registry/**"
+      - "internal/erasure/**"
+      - "internal/keyscope/**"
+      - "deploy/control-plane/**"
+      - "go.mod"
+      - "go.sum"
+      - ".dockerignore"
+      - ".github/workflows/control-plane-image.yml"
+  pull_request:
+    branches: [main, stage]
+    paths:
+      - "cmd/registry/**"
+      - "cmd/destruction-coordinator/**"
+      - "cmd/destruction-aggregator/**"
+      - "internal/registry/**"
+      - "internal/erasure/**"
+      - "internal/keyscope/**"
+      - "deploy/control-plane/**"
+      - "go.mod"
+      - "go.sum"
+      - ".dockerignore"
+      - ".github/workflows/control-plane-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}/sealed-control-plane
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/stage' && 'staging' || github.event_name == 'pull_request' && 'preview' || 'production' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          labels: |
+            org.opencontainers.image.title=sealed-control-plane
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=stage,enable=${{ github.ref == 'refs/heads/stage' }}
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/control-plane/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The three binaries are what actually run a destruction; their digests are
+      # baked in at build time so an operator can be checked against what was built.
+      - name: Report binary commitments from the image
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          DIGEST="${{ steps.build.outputs.digest }}"
+          if [ -z "${DIGEST}" ]; then
+            echo "missing image digest" >&2
+            exit 1
+          fi
+          REF="${IMAGE_NAME}@${DIGEST}"
+          docker pull "${REF}"
+          for role in sealed-registry destruction-coordinator destruction-aggregator; do
+            COMMITMENT="$(docker run --rm --entrypoint cat "${REF}" "/usr/local/share/nexqloud/${role}.commitment" | tr -d '[:space:]')"
+            case "${COMMITMENT}" in
+              sha256:*) ;;
+              *) echo "invalid commitment for ${role}: ${COMMITMENT}" >&2; exit 1 ;;
+            esac
+            echo "${role} ${COMMITMENT}"
+          done
+
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image digest (keyless → Rekor)
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DIGEST}" ]; then
+            echo "missing image digest from build-push" >&2
+            exit 1
+          fi
+          cosign sign --yes "${IMAGE_NAME}@${DIGEST}"

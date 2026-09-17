@@ -51,6 +51,11 @@ clean:
 image-shim:
 	docker build -t "$(SHIM_IMAGE)" -f deploy/shim/Dockerfile .
 
+CONTROL_PLANE_IMAGE ?= ghcr.io/nexqloud/nexqloud-sealed/sealed-control-plane
+
+image-control-plane:
+	docker build -t "$(CONTROL_PLANE_IMAGE)" -f deploy/control-plane/Dockerfile .
+
 image-model-attest:
 	docker build -t "$(MODEL_ATTEST_IMAGE)" -f deploy/model-attest/Dockerfile .
 
