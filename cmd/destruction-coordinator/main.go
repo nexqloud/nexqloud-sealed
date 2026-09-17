@@ -22,7 +22,8 @@ func main() {
 	flag.Parse()
 
 	reg := registry.NewHTTPClient(*registryURL)
-	coord := destruction.NewCoordinator(reg, *aggregatorURL, destruction.ParseOperatorURLs(*operators))
+	operatorURLs := destruction.ParseOperatorURLs(*operators)
+	coord := destruction.NewCoordinator(reg, *aggregatorURL, operatorURLs)
 	if *jwksURL != "" {
 		sk, err := destruction.LoadCoordinatorKey(*coordinatorKeyHex)
 		if err != nil {
@@ -35,6 +36,10 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	// Substrate-side scope registration: the platform asks for a conversation key
+	// scope and every operator seals the same seed, without the caller ever holding
+	// it or knowing operator addresses.
+	mux.HandleFunc("/keyscopes", handleCreateKeyScope(operatorURLs))
 	mux.HandleFunc("/destructions", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:

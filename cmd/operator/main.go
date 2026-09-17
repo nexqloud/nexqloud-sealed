@@ -3,15 +3,12 @@
 package main
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -19,9 +16,9 @@ import (
 
 	"nexqloud-sealed/internal/attest"
 	"nexqloud-sealed/internal/devmode"
-	"nexqloud-sealed/internal/erasure/destruction"
-	"nexqloud-sealed/internal/erasure/destroy"
 	"nexqloud-sealed/internal/enclave"
+	"nexqloud-sealed/internal/erasure/destroy"
+	"nexqloud-sealed/internal/operatorsurface"
 	"nexqloud-sealed/internal/receipt"
 	"nexqloud-sealed/internal/registry"
 )
@@ -59,6 +56,13 @@ func main() {
 		StateDir:       *stateDir,
 		LocalStore:     local,
 		Attestation:    operatorAttestation,
+		MarkSigner:     priv,
+		// Destroying the registry-held wrap is what makes the erasure durable: the
+		// local cache and file are overwritten too, but without this an operator
+		// restart would refetch the material that was supposedly erased.
+		DestroyRegistryWrap: func(tenantID string) error {
+			return reg.DestroyWrap(tenantID, *operatorID)
+		},
 		SignReceipt: func(input destroy.ReceiptInput) (destroy.Receipt, error) {
 			nonce, err := destroy.RandomNonce()
 			if err != nil {
@@ -81,7 +85,11 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/destruction", handleDestruction)
+	operatorsurface.Register(mux, operatorsurface.Config{
+		Registry:   reg,
+		OperatorID: *operatorID,
+		StateDir:   *stateDir,
+	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -89,56 +97,6 @@ func main() {
 
 	log.Printf("operator %s listening on %s (pubkey %s)", *operatorID, *addr, hex.EncodeToString(pub))
 	log.Fatal(http.ListenAndServe(*addr, mux))
-}
-
-func handleDestruction(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "read body", http.StatusBadRequest)
-		return
-	}
-
-	var req destruction.SignedDestroyReq
-	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
-		return
-	}
-
-	rcpt, err := destroy.Destroy(req, req.TenantID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusForbidden)
-		return
-	}
-
-	if req.AggregatorSubmitURL != "" {
-		payload, err := json.Marshal(rcpt)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		resp, err := http.Post(req.AggregatorSubmitURL, "application/json", bytes.NewReader(payload))
-		if err != nil {
-			http.Error(w, fmt.Sprintf("submit receipt: %v", err), http.StatusBadGateway)
-			return
-		}
-		defer resp.Body.Close()
-		respBody, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			http.Error(w, fmt.Sprintf("aggregator %s: %s", resp.Status, strings.TrimSpace(string(respBody))), http.StatusBadGateway)
-			return
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(rcpt)
 }
 
 func operatorAttestation(pub ed25519.PublicKey, nonce []byte) ([]byte, error) {

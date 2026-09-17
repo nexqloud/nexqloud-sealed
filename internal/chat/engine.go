@@ -23,6 +23,9 @@ type Materials struct {
 	Chip       []byte
 	AttestBind []byte
 	KeyVersion int
+	// SeedFor resolves the key seed for a tenant. Set when key scopes carry their
+	// own material; when nil, Seed is used for every tenant.
+	SeedFor func(tenantID string) ([]byte, error)
 }
 
 type Engine struct {
@@ -51,7 +54,15 @@ func (e *Engine) deriveDEK(id identity.VerifiedIdentity) ([]byte, error) {
 	if version == 0 {
 		version = material.KeyVersion
 	}
-	return kdf.DeriveDEK(e.Materials.Seed, e.Materials.Chip, id.ClaimDigest, e.Materials.AttestBind, tenantID, version)
+	seed := e.Materials.Seed
+	if e.Materials.SeedFor != nil {
+		resolved, err := e.Materials.SeedFor(tenantID)
+		if err != nil {
+			return nil, err
+		}
+		seed = resolved
+	}
+	return kdf.DeriveDEK(seed, e.Materials.Chip, id.ClaimDigest, e.Materials.AttestBind, tenantID, version)
 }
 
 func (e *Engine) Decrypt(id identity.VerifiedIdentity, encoded string) ([]chatstate.Message, error) {

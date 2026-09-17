@@ -22,7 +22,9 @@ import (
 	"nexqloud-sealed/internal/enclave"
 	"nexqloud-sealed/internal/identity"
 	"nexqloud-sealed/internal/inference"
+	"nexqloud-sealed/internal/keyscope"
 	"nexqloud-sealed/internal/receipt"
+	"nexqloud-sealed/internal/registry"
 )
 
 const defaultAddr = ":8080"
@@ -76,11 +78,20 @@ func main() {
 		log.Fatalf("generate enclave key: %v", err)
 	}
 
+	// A sealed deployment is also an operator node. Enabling this is what lets a
+	// deployment be told to zeroize a conversation scope's key material; it stays off
+	// unless the substrate environment is present, so other deployments are unchanged.
+	enableOperatorSurface(mux, srv, priv, pub)
+
 	log.Printf("warming AMD KDS certificate cache (VCEK, ASK, ARK)...")
 	if err := enclave.WarmCertificateCache(pub); err != nil {
-		log.Fatalf("warm certificate cache: %v", err)
+		if !devmode.Enabled() {
+			log.Fatalf("warm certificate cache: %v", err)
+		}
+		log.Printf("identity: dev mode — running without an AMD certificate chain (%v)", err)
+	} else {
+		log.Printf("AMD certificate cache ready")
 	}
-	log.Printf("AMD certificate cache ready")
 
 	seed, err := material.Seed()
 	if err != nil {
@@ -93,15 +104,37 @@ func main() {
 	attestBind := loadAttestBind(pub)
 
 	receiptBuilder := receipt.NewBuilder(priv, pub)
+	chatMaterials := chat.Materials{
+		Seed:       seed,
+		Chip:       chip,
+		AttestBind: attestBind,
+		KeyVersion: material.KeyVersion,
+	}
+	// Conversation key scopes keep their own seed, sealed per operator in the
+	// federation registry. When the registry is configured, a scoped tenant resolves
+	// its seed from this operator's own wrap, so destroying that wrap really does
+	// destroy the key that opens the conversation. Legacy account-scoped tenants keep
+	// using the shared operator seed.
+	if registryURL := envOr("NEXQLOUD_REGISTRY_URL", ""); registryURL != "" {
+		resolver := &keyscope.Resolver{
+			Client:     registry.NewHTTPClient(registryURL),
+			OperatorID: envOr("NEXQLOUD_OPERATOR_ID", ""),
+			Chip:       material.Chip,
+		}
+		shared := seed
+		chatMaterials.SeedFor = func(tenantID string) ([]byte, error) {
+			if !keyscope.IsScope(tenantID) {
+				return shared, nil
+			}
+			return resolver.Seed(tenantID)
+		}
+		log.Printf("keyscope: resolving scoped seeds from registry %s as %s", registryURL, envOr("NEXQLOUD_OPERATOR_ID", "(no operator id)"))
+	}
+
 	srv.engine = &chat.Engine{
 		Inference: selectInferenceBackend(),
 		Seal:      receiptBuilder.Seal,
-		Materials: chat.Materials{
-			Seed:       seed,
-			Chip:       chip,
-			AttestBind: attestBind,
-			KeyVersion: material.KeyVersion,
-		},
+		Materials: chatMaterials,
 	}
 
 	if srv.jwksURL == "" {
