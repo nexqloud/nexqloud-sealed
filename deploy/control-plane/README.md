@@ -19,6 +19,18 @@ ghcr.io/nexqloud/nexqloud-sealed/sealed-control-plane:latest   # production
 One image, three roles, selected by the first argument. Build locally with
 `make image-control-plane` (tag `sealed-control-plane:local`).
 
+`docker-compose.yml` in this directory brings the whole control plane up with one
+command, and the same file works with `nerdctl compose` on a nanoserver host:
+
+```bash
+docker compose -f deploy/control-plane/docker-compose.yml up -d
+```
+
+It reads `COORDINATOR_KEY_HEX`, `SUBSTRATE_KEY_HEX`, `MONGO_URL`, `SHIM_OPERATOR_MAP`
+and `CUSTOMER_JWKS_URL` from a gitignored `.env` next to it; the header of that file has
+the exact generation commands, and the coordinator's public key for the shims comes from
+`go run ./demo/two-vm/coordinator_pubkey.go "$COORDINATOR_KEY_HEX"`.
+
 Every binary's sha256 is baked in at build time:
 
 ```bash

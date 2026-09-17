@@ -1,0 +1,103 @@
+# Erasure control plane (invention 3): registry + destruction coordinator + destruction aggregator.
+#
+# One coordinator, one aggregator and one registry serve the whole federation — never one per
+# operator node. None of the three needs a TEE and none of them ever holds key material.
+#
+# The same file works with `docker compose` and with `nerdctl compose`, so it can run beside the
+# dcp services or on a nanoserver host.
+#
+# Configuration comes from a .env file next to this file (gitignored). Generate the keys first —
+# they must never be committed or pasted into a chat:
+#
+#   umask 077
+#   printf 'COORDINATOR_KEY_HEX=%s\n' "$(openssl rand -hex 32)" >  .env
+#   printf 'SUBSTRATE_KEY_HEX=%s\n'   "$(openssl rand -hex 32)" >> .env
+#   printf 'MONGO_URL=%s\n'           'mongodb://<user>:<pass>@<host>:27017/?authSource=admin' >> .env
+#   printf 'SHIM_OPERATOR_MAP=%s\n'   'operator-a=http://<shim-a-host>:8080,operator-b=http://<shim-b-host>:8080' >> .env
+#   printf 'CUSTOMER_JWKS_URL=%s\n'   'https://<gateway-host>/.well-known/sealed-jwks.json' >> .env
+#
+# The public key the coordinator signs with, which every shim must be given at deploy time:
+#
+#   go run ./demo/two-vm/coordinator_pubkey.go "$COORDINATOR_KEY_HEX"
+#
+# Start:  docker compose -f deploy/control-plane/docker-compose.yml up -d
+# Logs:   docker compose -f deploy/control-plane/docker-compose.yml logs -f coordinator
+#
+# Each sealed deployment (shim) that should join the destruction quorum needs, at deploy time:
+#   NEXQLOUD_REGISTRY_URL         http://<registry-host>:7001
+#   NEXQLOUD_OPERATOR_ID          this node's identity, matching an entry in SHIM_OPERATOR_MAP
+#   NEXQLOUD_COORDINATOR_PUB_HEX  output of the command above
+#   NEXQLOUD_STATE_DIR            a writable directory inside the guest
+# Rotating the coordinator key means redeploying those shims.
+
+services:
+  registry:
+    image: ${CONTROL_PLANE_IMAGE:-ghcr.io/nexqloud/nexqloud-sealed/sealed-control-plane:stage}
+    command:
+      - registry
+      - --addr
+      - ":7001"
+      - --db
+      - ${REGISTRY_DB:-sealed_registry}
+      - --collection
+      - ${REGISTRY_COLLECTION:-commitments}
+    environment:
+      MONGO_URL: ${MONGO_URL:?MONGO_URL is required}
+    ports:
+      - "7001:7001"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7001/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  aggregator:
+    image: ${CONTROL_PLANE_IMAGE:-ghcr.io/nexqloud/nexqloud-sealed/sealed-control-plane:stage}
+    command:
+      - aggregator
+      - --addr
+      - ":7004"
+      - --substrate-key-hex
+      - ${SUBSTRATE_KEY_HEX:?SUBSTRATE_KEY_HEX is required}
+    ports:
+      - "7004:7004"
+    # No -f on purpose: an unknown destruction answers 404, which still proves the
+    # listener is up, while a refused connection fails the probe.
+    healthcheck:
+      test: ["CMD", "curl", "-sS", "-o", "/dev/null", "http://127.0.0.1:7004/destructions/healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  coordinator:
+    image: ${CONTROL_PLANE_IMAGE:-ghcr.io/nexqloud/nexqloud-sealed/sealed-control-plane:stage}
+    command:
+      - coordinator
+      - --addr
+      - ":7003"
+      - --registry
+      - http://registry:7001
+      - --aggregator
+      - http://aggregator:7004
+      - --operators
+      - ${SHIM_OPERATOR_MAP:?SHIM_OPERATOR_MAP is required}
+      - --jwks
+      - ${CUSTOMER_JWKS_URL:?CUSTOMER_JWKS_URL is required}
+      - --coordinator-key-hex
+      - ${COORDINATOR_KEY_HEX:?COORDINATOR_KEY_HEX is required}
+    ports:
+      - "7003:7003"
+    depends_on:
+      - registry
+      - aggregator
+    healthcheck:
+      test: ["CMD", "curl", "-sS", "-o", "/dev/null", "http://127.0.0.1:7003/destructions/healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
