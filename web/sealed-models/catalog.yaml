@@ -7,3 +7,10 @@ models:
     revision: 9217f5db79a29953eb74d5343926648285ec7e67
     file: qwen2.5-0.5b-instruct-q4_k_m.gguf
     quant: Q4_K_M
+  # Qwen3.6 35B A3B (MoE, ~3B active) — Unsloth Dynamic Q4_K_XL, ~22.4 GB. The UD-Q4_K_XL
+  # quant exists only in the Unsloth GGUF repo, so the provider differs from the entry above.
+  - id: qwen3.6-35b-a3b
+    hf_repo: unsloth/Qwen3.6-35B-A3B-GGUF
+    revision: a483e9e6cbd595906af30beda3187c2663a1118c
+    file: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+    quant: Q4_K_XL
