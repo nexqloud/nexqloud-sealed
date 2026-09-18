@@ -10,7 +10,19 @@
       "file": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
       "quant": "Q4_K_M",
       "expected_model_commitment": "staging/sealed-models/qwen-0.5b/expected-model-commitment.txt",
-      "model_meta": "staging/sealed-models/qwen-0.5b/model-meta.json"
+      "model_meta": "staging/sealed-models/qwen-0.5b/model-meta.json",
+      "model_gguf": "staging/sealed-models/qwen-0.5b/model.gguf"
+    },
+    {
+      "id": "qwen3.6-35b-a3b",
+      "commitment": "sha256:707a55a8a4397ecde44de0c499d3e68c1ad1d240d1da65826b4949d1043f4450",
+      "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+      "revision": "a483e9e6cbd595906af30beda3187c2663a1118c",
+      "file": "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+      "quant": "Q4_K_XL",
+      "expected_model_commitment": "staging/sealed-models/qwen3.6-35b-a3b/expected-model-commitment.txt",
+      "model_meta": "staging/sealed-models/qwen3.6-35b-a3b/model-meta.json",
+      "model_gguf": "staging/sealed-models/qwen3.6-35b-a3b/model.gguf"
     }
   ]
 }
