@@ -200,18 +200,34 @@ func handleKeyScope(cfg Config) http.HandlerFunc {
 		}
 
 		generated := false
+		existingSlot := false
 		seed, err := keyscope.ParseSeed(req.SeedHex)
 		if err != nil {
 			if strings.TrimSpace(req.SeedHex) != "" {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			seed, err = keyscope.NewSeed()
-			if err != nil {
-				http.Error(w, "generate seed", http.StatusInternalServerError)
+			// Idempotent registration. If this node already holds a slot for the scope, reuse
+			// that seed: the registry refuses to overwrite live key material (an overwrite
+			// would rotate the conversation's DEK and make stored ciphertext unopenable), so a
+			// repeat registration used to end as a 502 — and every refresh, new tab or second
+			// turn re-registers. Returning the existing seed makes the call safe to retry.
+			resolver := &keyscope.Resolver{Client: cfg.Registry, OperatorID: cfg.OperatorID, Chip: material.Chip}
+			if prior, perr := resolver.Seed(scopeID); perr == nil {
+				seed = prior
+				existingSlot = true
+			} else if !strings.Contains(perr.Error(), keyscope.ErrNoKeyMaterial.Error()) {
+				http.Error(w, "resolve existing key material: "+perr.Error(), http.StatusInternalServerError)
 				return
 			}
-			generated = true
+			if !existingSlot {
+				seed, err = keyscope.NewSeed()
+				if err != nil {
+					http.Error(w, "generate seed", http.StatusInternalServerError)
+					return
+				}
+				generated = true
+			}
 		}
 
 		chipSecret, err := material.Chip()
@@ -222,9 +238,11 @@ func handleKeyScope(cfg Config) http.HandlerFunc {
 		wrap := state.Seal(chipSecret, seed)
 		seedCommit := keyscope.SeedCommit(seed)
 
-		if err := cfg.Registry.PutWrap(scopeID, cfg.OperatorID, wrap, seedCommit); err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
+		if !existingSlot {
+			if err := cfg.Registry.PutWrap(scopeID, cfg.OperatorID, wrap, seedCommit); err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
 		}
 		// Record how this node can be reached, so the coordinator does not need a
 		// hand-maintained operator map. Best effort: a scope with material but no
