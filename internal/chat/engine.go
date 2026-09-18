@@ -62,6 +62,7 @@ func (e *Engine) deriveDEK(id identity.VerifiedIdentity) ([]byte, error) {
 		}
 		seed = resolved
 	}
+	kdf.TraceIdentity("engine", tenantID, id.ClaimDigest)
 	return kdf.DeriveDEK(seed, e.Materials.Chip, id.ClaimDigest, e.Materials.AttestBind, tenantID, version)
 }
 

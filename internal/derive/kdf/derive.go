@@ -11,6 +11,7 @@ import (
 const dekLength = 32
 
 func DeriveDEK(seed, chipSecret, claimHash, attestBind []byte, tenantID string, version int) ([]byte, error) {
+	TraceInputs("dek", seed, chipSecret, claimHash, attestBind, tenantID, version)
 	ikm := append(seed, chipSecret...)
 	salt := append(claimHash, attestBind...)
 	info := []byte(fmt.Sprintf("sealed-dek/1|%s|v%d", tenantID, version))
