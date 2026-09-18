@@ -11,6 +11,11 @@
       "id": "qwen-0.5b-pre-kv-isolation",
       "model": "qwen-0.5b",
       "policy_hash": "sha256:404ce44f9a841944db9e2a4b40522f1e22561547918c38ec5bc016676a48b23e"
+    },
+    {
+      "id": "qwen3.6-35b-a3b",
+      "model": "qwen3.6-35b-a3b",
+      "policy_hash": "sha256:756bfec7099d454a162fc1134685f385a0fd9b5a3534dbbf7efa88c38d3fd910"
     }
   ]
 }

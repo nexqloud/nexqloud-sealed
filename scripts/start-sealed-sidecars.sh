@@ -36,14 +36,17 @@ fi
 : "${MODEL_ATTEST_ISSUER_PRIVKEY:?set MODEL_ATTEST_ISSUER_PRIVKEY}"
 
 INFERENCE_BACKEND="${INFERENCE_BACKEND:-llama}"
-MODEL_HOST_PATH="${MODEL_HOST_PATH:-/var/lib/nexqloud/models/qwen-0.5b.gguf}"
-MODEL_ID="${MODEL_ID:-qwen-0.5b}"
+# No default model. This stack serves whatever the operator names, and a silent
+# qwen-0.5b fallback is how a deployment ends up running the wrong weights.
+: "${MODEL_ID:?set MODEL_ID to the model id from the catalog (e.g. qwen3.6-35b-a3b)}"
+: "${MODEL_HOST_PATH:?set MODEL_HOST_PATH to the GGUF on this host (see the sealed-models allowlist for the file name)}"
 WIPE_IMAGE="${WIPE_IMAGE:-ghcr.io/nexqloud/nexqloud-sealed/sealed-wipe:stage}"
 ATTEST_IMAGE="${ATTEST_IMAGE:-ghcr.io/nexqloud/nexqloud-sealed/sealed-model-attest:stage}"
 LLAMA_IMAGE="${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}"
 VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:latest}"
-VLLM_MODEL="${VLLM_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}"
-VLLM_MODEL_HOST_PATH="${VLLM_MODEL_HOST_PATH:-/var/lib/nexqloud/vllm-models/qwen-0.5b}"
+# vLLM needs an HF repo id, which cannot be derived from the model id; set it explicitly.
+VLLM_MODEL="${VLLM_MODEL:-}"
+VLLM_MODEL_HOST_PATH="${VLLM_MODEL_HOST_PATH:-/var/lib/nexqloud/vllm-models/${MODEL_ID}}"
 VLLM_SERVED_NAME="${VLLM_SERVED_NAME:-${MODEL_ID}}"
 VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-4096}"
 VLLM_GPU_MEM_UTIL="${VLLM_GPU_MEM_UTIL:-0.85}"
