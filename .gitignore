@@ -39,3 +39,6 @@ vm1
 
 # Local / CI build trees
 /out/
+
+registry
+shim
