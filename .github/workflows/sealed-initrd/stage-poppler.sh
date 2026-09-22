@@ -135,15 +135,39 @@ done
 # As root, chroot is the honest test: no host library can satisfy a missing one.
 # Unprivileged, fall back to running the staged binary through the staged loader,
 # which still proves the closure resolves entirely inside the rootfs.
+# Three ways to exercise the rootfs, best first:
+#   chroot       — we are root: no host path is visible at all
+#   sudo-chroot  — CI runs unprivileged but has passwordless sudo: equally airtight
+#   loader       — last resort: run the staged binary through the staged loader,
+#                  mapping guest paths onto ${STAGE}. Proves the closure resolves,
+#                  though the loader may still fall back to host directories.
+RUN_MODE="loader"
 if [[ "$(id -u)" == "0" ]]; then
-  run_guest() { chroot "${STAGE}" "$@"; }
-else
-  run_guest() {
-    local bin="$1"
-    shift
-    "${STAGE}${LOADER}" --library-path "${STAGED_LIBPATH}" "${STAGE}${bin}" "$@"
-  }
+  RUN_MODE="chroot"
+elif sudo -n true 2>/dev/null; then
+  RUN_MODE="sudo-chroot"
 fi
+say "probing the rootfs via ${RUN_MODE}"
+
+run_guest() {
+  local arg
+  case "${RUN_MODE}" in
+    chroot) chroot "${STAGE}" "$@" ;;
+    sudo-chroot) sudo -n chroot "${STAGE}" "$@" ;;
+    loader)
+      local bin="$1" mapped=()
+      shift
+      for arg in "$@"; do
+        if [[ "${arg}" == /* ]]; then
+          mapped+=("${STAGE}${arg}")
+        else
+          mapped+=("${arg}")
+        fi
+      done
+      "${STAGE}${LOADER}" --library-path "${STAGED_LIBPATH}" "${STAGE}${bin}" ${mapped[@]+"${mapped[@]}"}
+      ;;
+  esac
+}
 # always a host-visible path: the checks below read the rootfs from outside
 guest_path() { printf '%s' "${STAGE}$1"; }
 
