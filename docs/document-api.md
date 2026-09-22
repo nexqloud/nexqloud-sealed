@@ -74,9 +74,17 @@ needs no credentials for the enclave to reach its storage. Presigned URLs are sa
 because what comes back is ciphertext, and ciphertext authenticates itself — a stale or hostile link
 can only deliver bytes that fail the open.
 
+`source_url` must serve what the ingest door handed out: the **sealed-document container**, source
+envelope and page renders together. The door takes the source out of its own container (verifying
+every part against its digest on the way) rather than making each caller learn the container format,
+so a caller keeps one sealed object per document and hands the same URL to extract and to read-key.
+Bytes that are not a container are still accepted as a bare source envelope, but a caller with a
+container should not unwrap it first.
+
 `key_version` is checked against the version this enclave derives before anything is fetched, so a
 caller holding a document sealed under another version is told so rather than given a decryption
-failure to interpret.
+failure to interpret. A container whose header disagrees with the request (another document, another
+version) is refused on the container's own evidence, not the caller's word.
 
 The caller supplies the schema, and it is sent to the engine as a constraint. It **must allow null**
 for every field: a schema that requires a string in every property leaves the model no honest answer
@@ -173,6 +181,21 @@ hash, the challenge nonce and the enclave measurement.
 Note the cost: adding fields to `receipt.Package` changes the signed canonical form, so `pkg/verify`
 and the browser verifier in `web/` both have to learn a new schema (`sealed-document/1`). That is a
 coordinated change, not a local one.
+
+### Development receipts
+
+On a machine with no SEV-SNP (a laptop, CI) `RequestReport` fails, which used to end every receipt —
+including in dev mode, which is exactly where a placeholder was intended to keep the loop working.
+`NEXQLOUD_DEV=1` now falls back to a placeholder: the measurement becomes `placeholderMeasure`, the
+identity claim hash becomes the dev constant, the certificate chain is empty, and the package carries
+
+```
+dev_placeholder: true
+```
+
+A verifier must treat that as "signed, but nothing attested this": it is part of the signed package, so
+it cannot be stripped, and it is omitted entirely from a real receipt, so real signed bytes are
+unchanged. Outside dev mode a missing report is still a hard error.
 
 ## Not in scope
 

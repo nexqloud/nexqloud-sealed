@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -425,6 +426,12 @@ type extractResponse struct {
 	SchemaID   string         `json:"schema_id"`
 	Model      string         `json:"model,omitempty"`
 	Fields     map[string]any `json:"fields"`
+	// RawAnswer is the model's own answer, before parsing, and AnswerSHA256 is its
+	// digest as the receipt records it. A caller checks the digest and reads the
+	// fields out of this rather than trusting the parsed copy: otherwise a field
+	// could be altered in transit while the receipt still verified.
+	RawAnswer    string `json:"raw_answer,omitempty"`
+	AnswerSHA256 string `json:"answer_sha256,omitempty"`
 	// Confidence is measured from the engine's token probabilities. Absent means the
 	// engine reported none — never that the fields are certain.
 	Confidence       map[string]float64 `json:"confidence,omitempty"`
@@ -436,11 +443,49 @@ type extractResponse struct {
 	ReceiptID       string             `json:"receipt_id,omitempty"`
 	SealedReceipt   json.RawMessage    `json:"sealed_receipt,omitempty"`
 	ReceiptError    string             `json:"receipt_error,omitempty"`
+	// ReceiptPrompt and ReceiptResponse are the exact canonical lines the receipt's
+	// prompt_hash and response_hash cover. Returning them is what makes a receipt
+	// checkable by any caller in any language without reimplementing this enclave's
+	// canonical form: the caller hashes the line it was given and reads the values
+	// out of it, then checks they describe what it asked for.
+	ReceiptPrompt   string `json:"receipt_prompt,omitempty"`
+	ReceiptResponse string `json:"receipt_response,omitempty"`
 }
 
 // maxExtractTokens bounds one extraction answer. Twelve fields of JSON is nothing;
 // this is the stop for a model that starts writing an essay instead.
 const maxExtractTokens = 2048
+
+// unwrapContainer returns the sealed source envelope from whatever a caller stored.
+//
+// A caller keeps one sealed object per document: the container the ingest door handed
+// back. That container is transport for three things — the source envelope, the page
+// renders, and the header that names both — so a door that wants the source should take
+// it out of the container rather than make every caller learn the format. Bytes that are
+// not a container are passed through, because a caller who kept only the envelope is
+// still a caller.
+//
+// Decoding verifies every part against its digest, so a container that changed on the
+// way here is refused as corrupted — never opened and reported as the wrong key.
+func unwrapContainer(blob []byte, documentID string, keyVersion int) ([]byte, error) {
+	header, source, _, err := docwire.Decode(bytes.NewReader(blob))
+	if err != nil {
+		if errors.Is(err, docwire.ErrNotDocwire) {
+			return blob, nil
+		}
+		return nil, fmt.Errorf("the stored container is damaged: %v", err)
+	}
+	if header.KeyVersion != keyVersion {
+		return nil, fmt.Errorf("the container is sealed under key version %d", header.KeyVersion)
+	}
+	if header.DocumentID != "" && documentID != "" && header.DocumentID != documentID {
+		return nil, errors.New("that container holds a different document")
+	}
+	if len(source) == 0 {
+		return nil, errors.New("the container holds no document source")
+	}
+	return source, nil
+}
 
 // handleDocumentExtract reads one sealed document and returns the fields printed
 // on it.
@@ -537,6 +582,17 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// What a caller holds is what the ingest door handed them: a sealed-document
+	// container, with the source envelope inside it. Accepting our own container back is
+	// the difference between one sealed object per document and a caller that has to
+	// know which part of it this door happens to want — and the container's own header
+	// is a better check than the caller's word, so it is checked here too.
+	sealed, err = unwrapContainer(sealed, documentID, keyVersion)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+
 	kind, plaintext, err := documents.Open(dek, sealed, keyVersion)
 	if err != nil {
 		log.Printf("document extract: open: %v", err)
@@ -620,10 +676,14 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 		ConfidenceSource: source,
 		ModelConfidence:  answer.Confidence,
 		Pages:            len(render.PageTexts(text)),
+		RawAnswer:        completion.Content,
+		AnswerSHA256:     docwire.Digest([]byte(completion.Content)),
 	}
 
 	promptLine := canonicalExtractPrompt(documentID, out.SchemaID, keyVersion, out.Pages)
-	responseLine := canonicalExtractResponse(completion.Model, answer.Fields, measured)
+	responseLine := canonicalExtractResponse(completion.Model, completion.Content, measured)
+	out.ReceiptPrompt = promptLine
+	out.ReceiptResponse = responseLine
 	out.ReceiptID, out.SealedReceipt, out.ReceiptError = s.sealReceipt(id.Hash, req.ChallengeNonce, promptLine, responseLine, "document extract")
 
 	w.Header().Set("Content-Type", "application/json")
@@ -656,21 +716,35 @@ func canonicalExtractPrompt(documentID, schemaID string, keyVersion, pages int) 
 		documentID, schemaID, keyVersion, pages)
 }
 
-// canonicalExtractResponse is what response_hash covers: the model that read it,
-// and what it read. The fields are hashed as canonical JSON, and the confidence is
-// recorded as measured or not — a receipt that could not say whether a confidence
-// was measured would be worth less than one that says nothing.
-func canonicalExtractResponse(model string, fields map[string]any, confidence map[string]float64) string {
-	fieldsJSON, err := json.Marshal(fields)
-	if err != nil {
-		fieldsJSON = []byte("{}")
+// canonicalExtractResponse is what response_hash covers: which model read the
+// document, and what it answered.
+//
+// Every value in this line is a string either side of the boundary can reproduce
+// byte for byte: the answer by digest, the confidences fixed to four decimals.
+// Floating-point JSON is deliberately absent — Go writes a whole number as `1` and
+// Python as `1.0`, so binding a re-marshalled map would hand the caller a receipt it
+// cannot verify, which is worse than one without the number. The caller gets the
+// answer itself in the response, so it can hash exactly what it was given.
+func canonicalExtractResponse(model, answer string, confidence map[string]float64) string {
+	return fmt.Sprintf("sealed-document/1|document.extract|model=%s|answer_sha256=%s|confidence=%s",
+		model, docwire.Digest([]byte(answer)), canonicalConfidence(confidence))
+}
+
+// canonicalConfidence renders the measured confidences in one language-neutral
+// form: keys sorted, four decimal places, no spaces. `none` means the engine
+// reported no token probabilities and nothing was measured.
+func canonicalConfidence(confidence map[string]float64) string {
+	if len(confidence) == 0 {
+		return "none"
 	}
-	measured := "none"
-	if confidence != nil {
-		if raw, err := json.Marshal(confidence); err == nil {
-			measured = string(raw)
-		}
+	names := make([]string, 0, len(confidence))
+	for name := range confidence {
+		names = append(names, name)
 	}
-	return fmt.Sprintf("sealed-document/1|document.extract|model=%s|fields_sha256=%s|confidence=%s",
-		model, docwire.Digest(fieldsJSON), measured)
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, fmt.Sprintf("%q:%.4f", name, confidence[name]))
+	}
+	return "{" + strings.Join(parts, ",") + "}"
 }

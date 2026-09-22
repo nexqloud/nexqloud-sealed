@@ -16,6 +16,7 @@ import (
 	"nexqloud-sealed/internal/keyscope"
 	"nexqloud-sealed/internal/receipt"
 	"nexqloud-sealed/internal/render"
+	"nexqloud-sealed/pkg/docwire"
 )
 
 const extractSchema = `{
@@ -275,6 +276,76 @@ func TestHandleDocumentExtractRefusesAnUnreadableOrWronglySealedDocument(t *test
 	})
 }
 
+// The contract the application depends on: whatever the ingest door handed out is what
+// a document door takes back. A caller keeps one sealed object per document and should
+// not have to know that the source envelope is inside a transport container.
+func TestHandleDocumentExtractAcceptsTheContainerIngestHandedOut(t *testing.T) {
+	srv, fixture, fetcher, model := extractServer(t)
+	container := containerOf(t, fixture)
+
+	fetcher.blob = container
+	rec := httptest.NewRecorder()
+	srv.handleDocumentExtract(rec, extractRequestWith(extractBody(fixture)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if model.req.Prompt == "" {
+		t.Fatal("the model was never asked, so the container was not read")
+	}
+
+	t.Run("a container for another document is refused", func(t *testing.T) {
+		other := containerOf(t, fixture)
+		swapped := bytes.Replace(other, []byte(fixture.documentID), []byte(strings.Repeat("b", 64)), 1)
+		fetcher.blob = swapped
+		defer func() { fetcher.blob = container }()
+
+		rec := httptest.NewRecorder()
+		srv.handleDocumentExtract(rec, extractRequestWith(extractBody(fixture)))
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status %d, want 422", rec.Code)
+		}
+	})
+
+	t.Run("a container that changed on the way here is not opened", func(t *testing.T) {
+		damaged := bytes.Clone(container)
+		damaged[len(damaged)-1] ^= 0xff
+		fetcher.blob = damaged
+		defer func() { fetcher.blob = container }()
+
+		rec := httptest.NewRecorder()
+		srv.handleDocumentExtract(rec, extractRequestWith(extractBody(fixture)))
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status %d, want 422", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "damaged") {
+			t.Fatalf("body = %q, want it to name the container as damaged", rec.Body.String())
+		}
+	})
+}
+
+// containerOf wraps the fixture the way the ingest door would.
+func containerOf(t *testing.T, fixture *sealedFixture) []byte {
+	t.Helper()
+	header := docwire.Header{
+		Schema:       docwire.Schema,
+		DocumentID:   fixture.documentID,
+		KeyVersion:   fixture.keyVersion,
+		DetectedType: "cbp_7501",
+		Source:       partOf("source", fixture.envelope),
+		Pages:        []docwire.Part{partOf("page-001", fixture.pages[0])},
+		ReceiptID:    "rcpt-ingest",
+	}
+	var buf bytes.Buffer
+	if err := docwire.Encode(&buf, header, fixture.envelope, fixture.pages); err != nil {
+		t.Fatalf("encode container: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func partOf(name string, blob []byte) docwire.Part {
+	return docwire.Part{Name: name, Bytes: len(blob), SHA256: docwire.Digest(blob)}
+}
+
 func TestHandleDocumentExtractSaysWhenThereIsNoTextToRead(t *testing.T) {
 	srv, fixture, _, _ := extractServer(t)
 	srv.text = &textStub{err: render.ErrNoText}
@@ -437,14 +508,35 @@ func TestHandleDocumentExtractReceiptNamesTheDocumentAndSchema(t *testing.T) {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
 
+	var out extractResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("response is not json: %v", err)
+	}
+	// The lines the caller is handed are the ones the receipt covers, so a caller in
+	// any language can hash what it was given instead of reimplementing the form.
+	if out.ReceiptPrompt != seen.Prompt || out.ReceiptResponse != seen.Response {
+		t.Fatalf("the response's lines are not the receipted ones:\n  sent %q\n  hashed %q",
+			out.ReceiptPrompt+" / "+out.ReceiptResponse, seen.Prompt+" / "+seen.Response)
+	}
+	if out.AnswerSHA256 == "" || !strings.Contains(out.ReceiptResponse, out.AnswerSHA256) {
+		t.Fatalf("the answer digest in the response (%q) is not the one in the receipt (%q)",
+			out.AnswerSHA256, out.ReceiptResponse)
+	}
+	if out.RawAnswer != extractAnswer {
+		t.Fatalf("raw_answer = %q, want the model's own answer", out.RawAnswer)
+	}
+
 	if !strings.Contains(seen.Prompt, fixture.documentID) {
 		t.Fatalf("the receipt does not name the document: %q", seen.Prompt)
 	}
 	if !strings.Contains(seen.Prompt, "schema=cbp_7501") || !strings.Contains(seen.Prompt, "key_version=1") {
 		t.Fatalf("the receipt does not name the schema and key version: %q", seen.Prompt)
 	}
-	if !strings.Contains(seen.Response, "fields_sha256=") || !strings.Contains(seen.Response, "model=sealed-test-model") {
-		t.Fatalf("the receipt does not cover the model and the fields: %q", seen.Response)
+	if !strings.Contains(seen.Response, "answer_sha256=") || !strings.Contains(seen.Response, "model=sealed-test-model") {
+		t.Fatalf("the receipt does not cover the model and the answer: %q", seen.Response)
+	}
+	if !strings.Contains(seen.Response, "confidence=") {
+		t.Fatalf("the receipt does not cover the measured confidence: %q", seen.Response)
 	}
 	if strings.Contains(seen.Response, "8207301500") {
 		t.Fatal("the receipt carries a field value in the clear")
@@ -494,22 +586,55 @@ func TestHandleDocumentExtractRouteCarriesTheDocumentID(t *testing.T) {
 	})
 }
 
+// The canonical lines are a contract between this enclave and every caller that
+// checks a receipt, so these literals are pinned here and mirrored, byte for byte,
+// in the tariff application's own test (backend/tests/test_document_api.py). If one
+// side changes, the other's test must fail.
+const (
+	goldenDocumentID = "5f2c8d3a9e1b4c7d0a6f2e8b3c9d5a1e7f4b0c6d2a8e5f1b9c3d7a0e4f6b2c8d"
+	goldenModel      = "sealed-test-model"
+	goldenAnswer     = `{"fields":{"hts_10":"8207301500","qty":1200}}`
+	// sha256 of goldenAnswer, the same in Go and in Python.
+	goldenAnswerSHA256 = "7c59a2c272de44f5ce29ac4e961b00825ffa7537f33c1121e5f7c8875fdb6801"
+	goldenPrompt       = "sealed-document/1|document.extract|id=" + goldenDocumentID + "|schema=cbp_7501|key_version=1|pages=2"
+	goldenResponse     = "sealed-document/1|document.extract|model=" + goldenModel +
+		"|answer_sha256=" + goldenAnswerSHA256 + `|confidence={"hts_10":0.1353,"qty":0.9512}`
+)
+
 func TestCanonicalExtractLinesAreStable(t *testing.T) {
-	prompt := canonicalExtractPrompt("abc", "cbp_7501", 2, 3)
-	if prompt != "sealed-document/1|document.extract|id=abc|schema=cbp_7501|key_version=2|pages=3" {
+	prompt := canonicalExtractPrompt(goldenDocumentID, "cbp_7501", 1, 2)
+	if prompt != goldenPrompt {
 		t.Fatalf("prompt = %q", prompt)
 	}
 
-	line := canonicalExtractResponse("m", map[string]any{"qty": 1200}, map[string]float64{"qty": 0.9})
-	if !strings.HasPrefix(line, "sealed-document/1|document.extract|model=m|fields_sha256=") {
-		t.Fatalf("response = %q", line)
+	response := canonicalExtractResponse(goldenModel, goldenAnswer, map[string]float64{
+		"qty":    0.9512,
+		"hts_10": 0.1353,
+	})
+	if response != goldenResponse {
+		t.Fatalf("response = %q\nwant     %q", response, goldenResponse)
 	}
-	if !strings.HasSuffix(line, `confidence={"qty":0.9}`) {
-		t.Fatalf("response does not carry the measured confidence: %q", line)
-	}
+}
 
-	unmeasured := canonicalExtractResponse("m", map[string]any{"qty": 1200}, nil)
-	if !strings.HasSuffix(unmeasured, "confidence=none") {
-		t.Fatalf("an unmeasured read is not marked as such: %q", unmeasured)
+func TestCanonicalConfidenceIsLanguageNeutral(t *testing.T) {
+	// Whole numbers are the trap: Go writes 1 as "1" and Python writes 1.0, so the
+	// line must not carry a float's own rendering.
+	cases := map[string]struct {
+		confidence map[string]float64
+		want       string
+	}{
+		"not measured": {confidence: nil, want: "none"},
+		"empty":        {confidence: map[string]float64{}, want: "none"},
+		"whole number": {confidence: map[string]float64{"qty": 1.0}, want: `{"qty":1.0000}`},
+		"zero":         {confidence: map[string]float64{"qty": 0.0}, want: `{"qty":0.0000}`},
+		"rounded":      {confidence: map[string]float64{"qty": 0.95125}, want: `{"qty":0.9513}`},
+		"sorted":       {confidence: map[string]float64{"qty": 0.5, "hts_10": 0.75}, want: `{"hts_10":0.7500,"qty":0.5000}`},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := canonicalConfidence(tc.confidence); got != tc.want {
+				t.Fatalf("canonicalConfidence = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

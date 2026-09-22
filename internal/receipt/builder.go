@@ -12,6 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/google/go-sev-guest/proto/sevsnp"
+
 	"nexqloud-sealed/internal/devmode"
 	"nexqloud-sealed/internal/enclave"
 	"nexqloud-sealed/internal/gpu"
@@ -26,10 +28,10 @@ const (
 )
 
 type Input struct {
-	Prompt             string
-	Response           string
-	ChallengeNonce     string
-	IdentityClaimHash  string
+	Prompt            string
+	Response          string
+	ChallengeNonce    string
+	IdentityClaimHash string
 }
 
 type Builder struct {
@@ -40,6 +42,11 @@ type Builder struct {
 func NewBuilder(priv ed25519.PrivateKey, pub ed25519.PublicKey) *Builder {
 	return &Builder{priv: priv, pub: pub}
 }
+
+// requestReport is the attestation seam. Both branches of the receipt's relationship
+// with hardware only exist on one kind of machine — with SEV-SNP and without it — so a
+// test that had to be run on one of them could never cover the other.
+var requestReport = enclave.RequestReport
 
 func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 	nonce, nonceHex, err := resolveNonce(in.ChallengeNonce)
@@ -52,9 +59,16 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		return nil, err
 	}
 
-	att, err := enclave.RequestReport(b.pub, nonce)
+	// A dev fallback is only useful if it is reachable. Requesting the report is the
+	// first thing that fails on a machine without SEV-SNP, so in dev mode the failure
+	// becomes the placeholder below instead of ending the receipt: the measurement is
+	// then the fixed dev constant, which is the marker a verifier sees.
+	att, err := requestReport(b.pub, nonce)
 	if err != nil {
-		return nil, fmt.Errorf("attestation: %w", err)
+		if !devmode.Enabled() {
+			return nil, fmt.Errorf("attestation: %w", err)
+		}
+		att = nil
 	}
 
 	measurement := ""
@@ -99,6 +113,10 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		ZeroizationCert:     zeroCert,
 		IdentityClaimHash:   identityHash,
 		Nonce:               nonceHex,
+		// A development receipt says so in the receipt itself. A verifier that does not
+		// happen to know the placeholder measurement constant can still see that no
+		// hardware attested this, instead of reading a signed package as proof.
+		DevPlaceholder: measurement == placeholderMeasure,
 	}
 
 	pkgMap, err := packageMap(pkg)
@@ -121,8 +139,12 @@ func (b *Builder) Seal(in Input) (*SealedReceipt, error) {
 		return nil, err
 	}
 
-	certChain := EncodeCertificateChain(att.CertificateChain)
-	if certChain.VCEK == "" {
+	var chain *sevsnp.CertificateChain
+	if att != nil {
+		chain = att.CertificateChain
+	}
+	certChain := EncodeCertificateChain(chain)
+	if certChain.VCEK == "" && !devmode.Enabled() {
 		return nil, fmt.Errorf("attestation missing VCEK certificate")
 	}
 
