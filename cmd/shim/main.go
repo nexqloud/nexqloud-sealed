@@ -80,6 +80,7 @@ func main() {
 	mux.HandleFunc("/v1/chat/decrypt", srv.requireReady(srv.handleDecrypt))
 	mux.HandleFunc("/v1/documents/ingest", srv.requireReady(srv.handleDocumentIngest))
 	mux.HandleFunc("/v1/documents/{document_id}/extract", srv.requireReady(srv.handleDocumentExtract))
+	mux.HandleFunc("/v1/documents/{document_id}/read-key", srv.requireReady(srv.handleDocumentReadKey))
 	// The sealed guest image pins the converter and a RAM-backed working
 	// directory; the shim only needs to be told where they are.
 	renderTemp := strings.TrimSpace(os.Getenv("NEXQLOUD_RENDER_TMP"))

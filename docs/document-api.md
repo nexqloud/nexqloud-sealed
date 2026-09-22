@@ -1,8 +1,8 @@
 # Document API
 
-Status: **ingest and extract are implemented** (`internal/documents`, `pkg/docwire`, `internal/render`,
-`internal/blobfetch`, `internal/extract`, `cmd/shim/documents.go` + `extract_test.go`). `read-key` and
-the attestation door are designed below and not yet written. This is the contract a document product
+Status: **ingest, extract and read-key are implemented** (`internal/documents`, `pkg/docwire`,
+`internal/render`, `internal/blobfetch`, `internal/extract`, `internal/readkey`, `cmd/shim/documents.go`).
+The attestation door is designed below and not yet written. This is the contract a document product
 builds against, so it is worth arguing with — but it is no longer a proposal.
 
 ## Why not the chat door
@@ -106,14 +106,43 @@ arrive with no relationship to each other.
 ### `POST /v1/documents/{document_id}/read-key`
 
 ```
-in   { purpose, ttl_seconds, challenge_nonce }
-out  { read_key, key_version, expires_at, receipt_id, sealed_receipt }
+in   { document_id, purpose, ttl_seconds, recipient_public_key, source_url, challenge_nonce? }
+out  a sealed-document container:
+       part "source"  the grant — the session key wrapped to the recipient, with its expiry
+       parts "page-*" the page renders, re-sealed under that session key
 ```
 
 For the human review screen: a short-lived key that opens one document's page renders, addressed to
-the caller's session, so a customer's browser can display a page while the application around it stays
-blind. Every grant is receipted — "who looked at this document, and when" becomes a fact rather than a
-log line, which for a customs claim is a feature, not overhead.
+the browser that asked for it, so a customer's reviewer can see a page while the application around
+them stays blind. Every grant is receipted — "who looked at this document, and when" becomes a fact
+rather than a log line, which for a customs claim is a feature, not overhead.
+
+**The key is not addressed to the caller.** `recipient_public_key` is the reviewer's browser's own
+P-256 public key, generated for that review session; the private half never leaves the browser. The
+enclave wraps the session key to it (ECDH → HKDF-SHA256 → AES-256-GCM, all native to WebCrypto) and
+re-seals the pages under the session key. The application relaying the request holds a container of
+ciphertext it cannot open, and the enclave never sees the browser's private half. This is what makes
+"the application only handles locked bytes" true for the review screen rather than aspirational.
+
+The response is a container rather than JSON because the pages are bytes: the same reason ingest uses
+one. A client reads the grant from the first part and the pages from the rest; the browser then
+unwraps the session key and opens each page with it. Nothing in the response needs to pass base64
+through the caller's database.
+
+`purpose` is `review` or absent, which means `review`. A lifetime outside 30 s–15 min is cut to the
+boundary, and an unstated one means 5 minutes. Only page renders are ever re-sealed — never the source
+document, which no reviewer needs in order to check a field.
+
+#### What a grant is worth, honestly
+
+Scope is enforced by cryptography: the session key opens this grant's page renders and nothing else —
+not the source document, not another grant, not another tenant's anything. Time is not: a key already
+in a browser cannot be taken back by a clock, so the expiry is a recorded promise the caller honours,
+not an enforcement point. What makes the promise meaningful is that the grant is receipted, and the
+receipt names the document, the purpose, the lifetime and the digest of the recipient key.
+
+The receipt never carries the wrapped session key, the salt or the ephemeral public key, only digests.
+A receipt is published to a transparency log; the wrapped key is addressed to one browser.
 
 ### `GET /v1/documents/attestation`
 
@@ -129,7 +158,11 @@ existing material (`internal/receipt/attestation.go`, `internal/modelattest`), e
   new version is a new key from the same seed. Rotation is therefore cheap; what needs deciding is
   policy: re-seal eagerly on rotation, or lazily on next read, and how long an old version stays
   openable. A five-year drawback lookback means old versions must keep working for years.
-- No endpoint returns key material. Not the DEK, not the seed, not a wrap.
+- No endpoint returns the tenant key, and none returns the seed or a wrap of it. `read-key` is not an
+  exception, and the distinction is worth stating precisely: it returns a **new, single-document
+  session key, addressed to a public key the enclave never holds the private half of**. The tenant DEK
+  stays inside the boundary; what leaves is a grant that opens one document's renders for a few
+  minutes, which is exactly the capability the review screen is supposed to have and no more.
 
 ## Receipts
 
@@ -148,15 +181,21 @@ coordinated change, not a local one.
 
 ## Open questions
 
-1. **The client-side sealing key.** For "the browser seals the file before upload", the browser needs a
-   public key it can trust and the enclave needs the private half. The shim has an ed25519 identity
-   already; wrapping needs an encryption key or an ECDH step. Not designed here.
+1. **The client-side sealing key for upload.** `read-key` settled the shape of the browser-facing
+   crypto: ECDH on P-256, HKDF-SHA256, AES-256-GCM — all WebCrypto-native, because adding a
+   hand-written XChaCha implementation to a browser security path would be a worse trade than using the
+   platform's own. Sealing *before upload* needs the same wrapping in the other direction plus a way for
+   the browser to be sure the public key it wraps to is the enclave's (today it is the enclave that
+   wraps, so the direction of trust is the easy one). Not designed here.
 2. **Schema ownership and versioning.** A `schema_id` that changes under existing cases silently
    changes what extraction returns for them. The schema is supplied per call today; if a case's
    extraction must stay reproducible years later, the schema (or its digest) has to be recorded with
    the case — the receipt carries the fields' digest, not the schema's.
-3. **`read-key` semantics.** How short a lifetime, what it is bound to, and how the browser proves it
-   is entitled to it. Every grant wants a receipt.
+3. **What a read-key grant cannot do.** It cannot be revoked before it expires, and it does not stop a
+   reviewer screenshotting a page. Neither is fixable with crypto; both are worth saying plainly to a
+   customer rather than implying otherwise. What remains open is whether a grant should be bound to a
+   single page count or a single browser tab, and whether an explicit `revoke` (receipted, advisory)
+   is worth having.
 4. **Scanned pages.** `pdftotext` returns nothing for a scan and extract answers 422 "no text layer".
    A vision model inside the enclosure is the fix; the seam (`internal/render`) is where it belongs.
 5. **Where the grammars come from.** The schema is handed to the engine per call. If extraction quality

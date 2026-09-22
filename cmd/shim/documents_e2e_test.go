@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"crypto/ecdh"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -16,6 +19,7 @@ import (
 	"nexqloud-sealed/internal/documents"
 	"nexqloud-sealed/internal/identity"
 	"nexqloud-sealed/internal/inference"
+	"nexqloud-sealed/internal/readkey"
 	"nexqloud-sealed/internal/render"
 	"nexqloud-sealed/pkg/docwire"
 )
@@ -225,4 +229,124 @@ func firstLines(s string, n int) string {
 		lines = lines[:n]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// TestHandleDocumentReadKeyWithTheRealConverter runs the review path end to end on
+// a real document: ingested and rendered by poppler, stored as ciphertext, fetched
+// by URL, re-sealed to a browser's own key, and opened by that browser — while the
+// bytes the application holds stay unreadable.
+//
+//	NEXQLOUD_TEST_PDF=/path/to/entry-summary.pdf go test ./cmd/shim/ -run RealConverter -v
+func TestHandleDocumentReadKeyWithTheRealConverter(t *testing.T) {
+	pdfPath := os.Getenv("NEXQLOUD_TEST_PDF")
+	if pdfPath == "" {
+		t.Skip("set NEXQLOUD_TEST_PDF to a real PDF to run the end-to-end review path")
+	}
+
+	pdf, err := os.ReadFile(pdfPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", pdfPath, err)
+	}
+
+	srv, _ := ingestServer(t, 0)
+	srv.renderer = &render.Exec{}
+
+	// 1. The customer's document goes in.
+	ingest := httptest.NewRecorder()
+	srv.handleDocumentIngest(ingest, ingestRequest(pdf, testNonce()))
+	if ingest.Code != http.StatusOK {
+		t.Fatalf("ingest status %d: %s", ingest.Code, ingest.Body.String())
+	}
+	header, _, sealedPages, err := docwire.Decode(bytes.NewReader(ingest.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if len(sealedPages) == 0 {
+		t.Fatal("the ingested document has no page renders")
+	}
+
+	// What the enclave itself would show, for comparison.
+	id := identity.DevIdentity("")
+	dek, keyVersion, err := srv.engine.DEK(id)
+	if err != nil {
+		t.Fatalf("DEK: %v", err)
+	}
+	wantPages := make([][]byte, 0, len(sealedPages))
+	for i, sealed := range sealedPages {
+		kind, page, err := documents.Open(dek, sealed, keyVersion)
+		if err != nil || kind != documents.KindPage {
+			t.Fatalf("open page %d: %v (kind %v)", i+1, err, kind)
+		}
+		wantPages = append(wantPages, page)
+	}
+
+	// 2. The application stores the container and serves it from its bucket.
+	objects := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(ingest.Body.Bytes())
+	}))
+	defer objects.Close()
+
+	// 3. A reviewer's browser asks for a page with its own public key.
+	reviewer, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("browser key: %v", err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"document_id":          header.DocumentID,
+		"purpose":              "review",
+		"ttl_seconds":          120,
+		"recipient_public_key": base64.StdEncoding.EncodeToString(reviewer.PublicKey().Bytes()),
+		"source_url":           objects.URL + "/" + header.DocumentID + ".nsdw",
+	})
+	if err != nil {
+		t.Fatalf("build body: %v", err)
+	}
+	srv.fetcher = &blobfetch.Fetcher{AllowPlainHTTP: true}
+
+	rec := httptest.NewRecorder()
+	srv.handleDocumentReadKey(rec, readKeyHTTPRequest(string(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read-key status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 4. The application relays those bytes and can read none of them.
+	held := rec.Body.Bytes()
+	for i, page := range bytes.Split(held, []byte("\x89PNG\r\n\x1a\n")) {
+		if i > 0 && len(page) > len(wantPages[0])/2 {
+			t.Fatal("a full page image is readable straight out of the relayed bytes")
+		}
+	}
+
+	grantHeader, grantBlob, grantedPages, err := docwire.Decode(bytes.NewReader(held))
+	if err != nil {
+		t.Fatalf("the response is not a container: %v", err)
+	}
+	var grant readkey.Wrapped
+	if err := json.Unmarshal(grantBlob, &grant); err != nil {
+		t.Fatalf("the first part is not a grant: %v", err)
+	}
+	if grant.TTLSeconds != 120 || grantHeader.ReceiptID == "" {
+		t.Fatalf("grant = %+v (receipt %q)", grant, grantHeader.ReceiptID)
+	}
+
+	// 5. The browser opens the key and the page.
+	sessionKey, err := readkey.Open(reviewer, grant)
+	if err != nil {
+		t.Fatalf("the browser could not open its grant: %v", err)
+	}
+	if len(grantedPages) != len(wantPages) {
+		t.Fatalf("granted %d pages, the document has %d", len(grantedPages), len(wantPages))
+	}
+	for i, sealed := range grantedPages {
+		page, err := readkey.OpenPage(sessionKey, sealed)
+		if err != nil {
+			t.Fatalf("the browser could not open page %d: %v", i+1, err)
+		}
+		if !bytes.Equal(page, wantPages[i]) {
+			t.Fatalf("page %d is not the render the enclave made", i+1)
+		}
+	}
+
+	t.Logf("review path: %s, %d page(s), first render %d bytes, opened by the browser byte-for-byte",
+		pdfPath, len(grantedPages), len(wantPages[0]))
 }

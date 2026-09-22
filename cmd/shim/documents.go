@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"nexqloud-sealed/internal/blobfetch"
 	"nexqloud-sealed/internal/derive/state"
@@ -16,6 +18,7 @@ import (
 	"nexqloud-sealed/internal/extract"
 	"nexqloud-sealed/internal/inference"
 	"nexqloud-sealed/internal/keyscope"
+	"nexqloud-sealed/internal/readkey"
 	"nexqloud-sealed/internal/receipt"
 	"nexqloud-sealed/internal/render"
 	"nexqloud-sealed/pkg/docwire"
@@ -192,7 +195,205 @@ func canonicalIngestPrompt(documentID string, keyVersion, sourceBytes, pages int
 		documentID, keyVersion, sourceBytes, pages)
 }
 
-// canonicalIngestResponse is what response_hash covers: the sealed bytes actually
+// readKeyRequest is a reviewer's browser asking to see one document.
+//
+// The document is not in the request and the key it asks for is not addressed to
+// the caller: recipient_public_key is the browser's own public key, generated for
+// this review session and never shared. The application relaying this request is
+// not the party being handed access — that is the whole point.
+type readKeyRequest struct {
+	DocumentID         string `json:"document_id"`
+	Purpose            string `json:"purpose"`
+	TTLSeconds         int    `json:"ttl_seconds"`
+	RecipientPublicKey string `json:"recipient_public_key"`
+	SourceURL          string `json:"source_url"`
+	ChallengeNonce     string `json:"challenge_nonce,omitempty"`
+}
+
+// handleDocumentReadKey issues a short-lived key that opens one document's page
+// renders, addressed to the browser that asked for it.
+//
+// The response is a container of ciphertext, not JSON: the first part is the grant
+// (the session key wrapped to the recipient, with its expiry) and the rest are the
+// page renders re-sealed under that session key. The calling application can hold
+// and relay the whole thing without being able to read a page.
+func (s *server) handleDocumentReadKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxExtractRequestBytes))
+	if err != nil {
+		http.Error(w, "cannot read request", http.StatusBadRequest)
+		return
+	}
+	var req readKeyRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "request is not json", http.StatusBadRequest)
+		return
+	}
+	if err := receipt.ValidateChallengeNonce(req.ChallengeNonce); err != nil {
+		http.Error(w, "challenge nonce is not acceptable", http.StatusBadRequest)
+		return
+	}
+	id, err := s.verifyIdentity(r, "")
+	if err != nil {
+		http.Error(w, "identity is not acceptable", http.StatusUnauthorized)
+		return
+	}
+
+	documentID := strings.TrimSpace(r.PathValue("document_id"))
+	if documentID == "" {
+		documentID = strings.TrimSpace(req.DocumentID)
+	} else if req.DocumentID != "" && req.DocumentID != documentID {
+		http.Error(w, "document id in the path and the body disagree", http.StatusBadRequest)
+		return
+	}
+	if documentID == "" {
+		http.Error(w, "no document named", http.StatusBadRequest)
+		return
+	}
+
+	// One purpose exists today, so an unstated one means review; anything else is
+	// refused rather than quietly treated as a read of the pages.
+	purpose := strings.TrimSpace(req.Purpose)
+	if purpose == "" {
+		purpose = readkey.PurposeReview
+	}
+	if purpose != readkey.PurposeReview {
+		http.Error(w, fmt.Sprintf("purpose %q is not issuable", purpose), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.SourceURL) == "" {
+		http.Error(w, "source_url is required", http.StatusBadRequest)
+		return
+	}
+	// Refuse an unusable recipient now: a grant nobody can open is worse than an
+	// error, because it looks like access was given.
+	recipient, err := readkey.ParseRecipient(strings.TrimSpace(req.RecipientPublicKey))
+	if err != nil {
+		http.Error(w, "recipient_public_key is not a usable public key", http.StatusBadRequest)
+		return
+	}
+
+	dek, keyVersion, err := s.engine.DEK(id)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, keyscope.ErrNoKeyMaterial) {
+			status = http.StatusForbidden
+		}
+		log.Printf("document read-key: derive key: %v", err)
+		http.Error(w, "no key material for this scope", status)
+		return
+	}
+
+	fetch := s.fetcher
+	if fetch == nil {
+		fetch = &blobfetch.Fetcher{}
+	}
+	container, err := fetch.Fetch(r.Context(), strings.TrimSpace(req.SourceURL))
+	if err != nil {
+		log.Printf("document read-key: fetch: %v", err)
+		http.Error(w, "cannot read the sealed document", http.StatusBadGateway)
+		return
+	}
+	header, _, sealedPages, err := docwire.Decode(bytes.NewReader(container))
+	if err != nil {
+		log.Printf("document read-key: container: %v", err)
+		http.Error(w, "stored bytes are not a sealed document", http.StatusUnprocessableEntity)
+		return
+	}
+	if header.KeyVersion != keyVersion {
+		http.Error(w, fmt.Sprintf("document is sealed under key version %d", header.KeyVersion), http.StatusUnprocessableEntity)
+		return
+	}
+	if header.DocumentID != "" && header.DocumentID != documentID {
+		http.Error(w, "that container holds a different document", http.StatusUnprocessableEntity)
+		return
+	}
+	if len(sealedPages) == 0 {
+		http.Error(w, "the document has no page renders to read", http.StatusUnprocessableEntity)
+		return
+	}
+
+	// Open the renders this enclave is permitted to show, then re-seal each under
+	// the session key so the browser can read it and the caller cannot.
+	pages := make([][]byte, 0, len(sealedPages))
+	for i, sealed := range sealedPages {
+		kind, page, err := documents.Open(dek, sealed, keyVersion)
+		if err != nil {
+			log.Printf("document read-key: open page %d: %v", i+1, err)
+			http.Error(w, "the sealed pages cannot be opened with this key", http.StatusUnprocessableEntity)
+			return
+		}
+		if kind != documents.KindPage {
+			log.Printf("document read-key: page %d is a %s", i+1, kind)
+			http.Error(w, "that container holds something other than page renders", http.StatusUnprocessableEntity)
+			return
+		}
+		pages = append(pages, page)
+	}
+
+	grant, err := readkey.Issue(recipient, documentID, purpose, keyVersion, len(pages), readkey.ClampTTL(req.TTLSeconds), time.Now())
+	if err != nil {
+		log.Printf("document read-key: issue: %v", err)
+		http.Error(w, "cannot issue a read key", http.StatusInternalServerError)
+		return
+	}
+
+	resealed := make([][]byte, 0, len(pages))
+	for i, page := range pages {
+		blob, err := readkey.SealPage(grant.Key, page)
+		if err != nil {
+			log.Printf("document read-key: seal page %d: %v", i+1, err)
+			http.Error(w, "cannot prepare the pages for the recipient", http.StatusInternalServerError)
+			return
+		}
+		resealed = append(resealed, blob)
+	}
+
+	// The grant travels as the container's first part: public by construction, and
+	// the only thing the recipient's browser needs besides the page bytes.
+	grantJSON, err := json.Marshal(grant.Wrapped)
+	if err != nil {
+		log.Printf("document read-key: grant json: %v", err)
+		http.Error(w, "cannot describe the grant", http.StatusInternalServerError)
+		return
+	}
+
+	out := docwire.Header{
+		DocumentID:   documentID,
+		KeyVersion:   keyVersion,
+		DetectedType: "read-key-grant",
+	}
+	promptLine := canonicalReadKeyPrompt(documentID, purpose, keyVersion, len(pages), grant.Wrapped.TTLSeconds, grant.Wrapped.RecipientSHA256)
+	responseLine := canonicalReadKeyResponse(grant.Wrapped.Ephemeral)
+	out.ReceiptID, out.Receipt, out.Error = s.sealReceipt(id.Hash, req.ChallengeNonce, promptLine, responseLine, "document read-key")
+
+	w.Header().Set("Content-Type", docwire.ContentType)
+	w.WriteHeader(http.StatusOK)
+	if err := docwire.Encode(w, out, grantJSON, resealed); err != nil {
+		// The status line is already out; the caller sees a truncated container and
+		// docwire refuses it, which is the honest outcome here.
+		log.Printf("document read-key: encode: %v", err)
+	}
+}
+
+func canonicalReadKeyPrompt(documentID, purpose string, keyVersion, pages, ttlSeconds int, recipientSHA string) string {
+	return fmt.Sprintf("sealed-document/1|document.read-key|id=%s|purpose=%s|key_version=%d|pages=%d|ttl_seconds=%d|recipient_sha256=%s",
+		documentID, purpose, keyVersion, pages, ttlSeconds, recipientSHA)
+}
+
+// canonicalReadKeyResponse covers what was handed over. It names the ephemeral
+// public key by digest and never the wrapped session key: a receipt is published
+// to a transparency log, and the wrapped key is addressed to one browser.
+func canonicalReadKeyResponse(ephemeral string) string {
+	return fmt.Sprintf("sealed-document/1|document.read-key|ephemeral_sha256=%s|granted=true",
+		docwire.Digest([]byte(ephemeral)))
+}
+
+// canonicalExtractPrompt is what response_hash covers: the sealed bytes actually
 // handed back, part by part.
 func canonicalIngestResponse(sourceDigest string, pageDigests []string, sealedBytes int) string {
 	return fmt.Sprintf("sealed-document/1|document.ingest|source_sha256=%s|pages=%s|sealed_bytes=%d",
