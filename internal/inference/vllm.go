@@ -54,9 +54,21 @@ func (v *VLLM) CompleteStream(req Request, emit TokenHandler) (Response, error) 
 
 func (v *VLLM) complete(req Request, stream bool, emit TokenHandler) (Response, error) {
 	payload := map[string]any{
-		"model":    req.Model,
-		"messages": req.Messages,
-		"stream":   stream,
+		"model":  req.Model,
+		"stream": stream,
+	}
+	// messages must be an array: an OpenAI-compatible server rejects a null before the
+	// engine ever reads the prompt. A document read is built as a plain prompt rather
+	// than a conversation, so it becomes the single user turn of one — without this a
+	// document extraction dies with a 400 while chat, which always fills Messages,
+	// keeps working.
+	switch {
+	case len(req.Messages) > 0:
+		payload["messages"] = req.Messages
+	case strings.TrimSpace(req.Prompt) != "":
+		payload["messages"] = []Message{{Role: "user", Content: req.Prompt}}
+	default:
+		payload["messages"] = []Message{}
 	}
 	if req.Temperature != nil {
 		payload["temperature"] = *req.Temperature

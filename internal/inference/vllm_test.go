@@ -59,6 +59,57 @@ func TestCompleteSendsConstraintsInTheEngineDialect(t *testing.T) {
 	}
 }
 
+func TestCompleteTurnsAPlainPromptIntoOneUserTurn(t *testing.T) {
+	// A document read builds a prompt, not a conversation. The wire format still has to
+	// be a conversation, or an OpenAI-compatible server rejects the request outright.
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Errorf("request body is not json: %v", err)
+		}
+		w.Write([]byte(`{"choices":[{"message":{"content":"{}"}}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewVLLM(srv.URL)
+	if _, err := client.Complete(Request{Model: "m", Prompt: "read this form"}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	msgs, ok := got["messages"].([]any)
+	if !ok {
+		t.Fatalf("messages is not an array: %#v", got["messages"])
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("want exactly one turn, got %v", msgs)
+	}
+	turn, _ := msgs[0].(map[string]any)
+	if turn["role"] != "user" || turn["content"] != "read this form" {
+		t.Fatalf("prompt did not become the user turn: %v", turn)
+	}
+}
+
+func TestCompleteNeverSendsMessagesAsNull(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		w.Write([]byte(`{"choices":[{"message":{"content":"{}"}}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewVLLM(srv.URL)
+	// Neither a prompt nor a conversation: a caller's bug, but it must surface as the
+	// engine's own validation error rather than as a null the engine cannot parse.
+	if _, err := client.Complete(Request{Model: "m"}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if _, ok := got["messages"].([]any); !ok {
+		t.Fatalf("messages is not an array: %#v", got["messages"])
+	}
+}
+
 func TestCompleteRejectsAnInvalidSchema(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("the request should never have been sent")
