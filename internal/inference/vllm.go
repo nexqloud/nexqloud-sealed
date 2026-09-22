@@ -15,6 +15,26 @@ import (
 type VLLM struct {
 	baseURL string
 	client  *http.Client
+	// Dialect is which engine is behind the endpoint. Empty means llama.cpp, the
+	// engine the sealed guests actually run.
+	Dialect Dialect
+}
+
+// Dialect names the serving engine. The two engines offer the same capabilities
+// under different field names, and a request shaped for the wrong one is silently
+// ignored rather than rejected — the constraint just does not apply.
+type Dialect string
+
+const (
+	DialectLlamaCpp Dialect = "llama.cpp"
+	DialectVLLM     Dialect = "vllm"
+)
+
+func (v *VLLM) dialect() Dialect {
+	if v.Dialect == DialectVLLM {
+		return DialectVLLM
+	}
+	return DialectLlamaCpp
 }
 
 func NewVLLM(baseURL string) *VLLM {
@@ -43,6 +63,9 @@ func (v *VLLM) complete(req Request, stream bool, emit TokenHandler) (Response, 
 	}
 	if req.MaxTokens != nil {
 		payload["max_tokens"] = *req.MaxTokens
+	}
+	if err := v.applyOutputConstraints(payload, req); err != nil {
+		return Response{}, err
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -76,6 +99,36 @@ func (v *VLLM) complete(req Request, stream bool, emit TokenHandler) (Response, 
 	return readJSON(resp.Body, req.Model)
 }
 
+// applyOutputConstraints adds a grammar and a logprobs request when the caller
+// asked for them. The schema is what keeps a document extraction structurally
+// correct: the engine is constrained to the shape rather than merely asked for it.
+func (v *VLLM) applyOutputConstraints(payload map[string]any, req Request) error {
+	if req.JSONSchema != "" {
+		if !json.Valid([]byte(req.JSONSchema)) {
+			return fmt.Errorf("inference: json_schema is not valid json")
+		}
+		key := "guided_json"
+		if v.dialect() == DialectLlamaCpp {
+			key = "json_schema"
+		}
+		payload[key] = json.RawMessage(req.JSONSchema)
+	}
+	if req.Grammar != "" {
+		key := "guided_grammar"
+		if v.dialect() == DialectLlamaCpp {
+			key = "grammar"
+		}
+		payload[key] = req.Grammar
+	}
+	if req.Logprobs {
+		payload["logprobs"] = true
+		if req.TopLogprobs > 0 {
+			payload["top_logprobs"] = req.TopLogprobs
+		}
+	}
+	return nil
+}
+
 func readJSON(r io.Reader, fallbackModel string) (Response, error) {
 	raw, err := io.ReadAll(r)
 	if err != nil {
@@ -91,6 +144,12 @@ func parseCompletionJSON(raw []byte, fallbackModel string) (Response, error) {
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			Logprobs struct {
+				Content []struct {
+					Token   string  `json:"token"`
+					Logprob float64 `json:"logprob"`
+				} `json:"content"`
+			} `json:"logprobs"`
 			Text string `json:"text"`
 		} `json:"choices"`
 	}
@@ -108,9 +167,18 @@ func parseCompletionJSON(raw []byte, fallbackModel string) (Response, error) {
 	if content == "" {
 		content = parsed.Choices[0].Text
 	}
+
+	// Built by append so that "the engine measured nothing" stays a nil slice: a
+	// caller must never read an absent measurement as a confident zero.
+	var tokens []TokenLogprob
+	for _, tok := range parsed.Choices[0].Logprobs.Content {
+		tokens = append(tokens, TokenLogprob{Token: tok.Token, Logprob: tok.Logprob})
+	}
+
 	return Response{
-		Content: content,
-		Model:   model,
+		Content:       content,
+		Model:         model,
+		TokenLogprobs: tokens,
 	}, nil
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"nexqloud-sealed/internal/blobfetch"
 	"nexqloud-sealed/internal/chat"
 	"nexqloud-sealed/internal/chatstate"
 	"nexqloud-sealed/internal/derive/material"
@@ -25,6 +26,7 @@ import (
 	"nexqloud-sealed/internal/keyscope"
 	"nexqloud-sealed/internal/receipt"
 	"nexqloud-sealed/internal/registry"
+	"nexqloud-sealed/internal/render"
 )
 
 const defaultAddr = ":8080"
@@ -38,6 +40,15 @@ type server struct {
 	verifyMode  string
 	httpClient  *http.Client
 	ready       atomic.Bool
+	// renderer draws the pages of a document inside the enclosure. Empty means
+	// the default converter on this guest.
+	renderer render.Renderer
+	// text reads a document's text layer inside the enclosure.
+	text textExtractor
+	// fetcher reads a sealed object from the caller's object storage.
+	fetcher blobFetcher
+	// maxDocumentBytes caps one uploaded document. Zero means the default.
+	maxDocumentBytes int64
 }
 
 func main() {
@@ -67,6 +78,26 @@ func main() {
 	mux.HandleFunc("/health", srv.handleHealth)
 	mux.HandleFunc("/v1/chat/completions", srv.requireReady(srv.handleChatCompletions))
 	mux.HandleFunc("/v1/chat/decrypt", srv.requireReady(srv.handleDecrypt))
+	mux.HandleFunc("/v1/documents/ingest", srv.requireReady(srv.handleDocumentIngest))
+	mux.HandleFunc("/v1/documents/{document_id}/extract", srv.requireReady(srv.handleDocumentExtract))
+	// The sealed guest image pins the converter and a RAM-backed working
+	// directory; the shim only needs to be told where they are.
+	renderTemp := strings.TrimSpace(os.Getenv("NEXQLOUD_RENDER_TMP"))
+	srv.renderer = &render.Exec{
+		Command: strings.TrimSpace(os.Getenv("NEXQLOUD_PDFTOPPM")),
+		TempDir: renderTemp,
+	}
+	srv.text = &render.ExecText{
+		Command: strings.TrimSpace(os.Getenv("NEXQLOUD_PDFTOTEXT")),
+		TempDir: renderTemp,
+	}
+	// Sealed objects are fetched from the caller's object storage over a presigned
+	// URL. Plain http is for local object storage in development only; the
+	// ciphertext authenticates itself, but there is no reason to let a production
+	// deployment accept an unencrypted transport.
+	srv.fetcher = &blobfetch.Fetcher{
+		AllowPlainHTTP: devmode.Enabled() && strings.TrimSpace(os.Getenv("NEXQLOUD_ALLOW_PLAIN_BLOB_URLS")) == "1",
+	}
 
 	go func() {
 		log.Printf("sealed-shim listening on %s (health ready; attestation warmup continuing)", *addr)

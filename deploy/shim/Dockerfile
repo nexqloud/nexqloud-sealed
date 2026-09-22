@@ -19,7 +19,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/sealed-
 
 FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
 
-RUN apk add --no-cache ca-certificates curl bash
+# poppler is what the document doors actually execute: pdftoppm draws the page
+# renders during ingest, pdftotext reads the text layer during extract. The image
+# decides where those tools live (NEXQLOUD_PDFTOPPM / NEXQLOUD_PDFTOTEXT); the fonts
+# are for PDFs that do not embed their own.
+RUN apk add --no-cache ca-certificates curl bash poppler-utils ttf-dejavu
 
 COPY --from=build /out/sealed-shim /usr/local/bin/sealed-shim
 COPY --from=snpguest-build /src/target/x86_64-unknown-linux-musl/release/snpguest /usr/local/bin/snpguest

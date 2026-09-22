@@ -50,10 +50,7 @@ func (e *Engine) deriveDEK(id identity.VerifiedIdentity) ([]byte, error) {
 	if len(id.ClaimDigest) == 0 {
 		return nil, fmt.Errorf("missing claim digest")
 	}
-	version := e.Materials.KeyVersion
-	if version == 0 {
-		version = material.KeyVersion
-	}
+	version := e.keyVersion()
 	seed := e.Materials.Seed
 	if e.Materials.SeedFor != nil {
 		resolved, err := e.Materials.SeedFor(tenantID)
@@ -64,6 +61,24 @@ func (e *Engine) deriveDEK(id identity.VerifiedIdentity) ([]byte, error) {
 	}
 	kdf.TraceIdentity("engine", tenantID, id.ClaimDigest)
 	return kdf.DeriveDEK(seed, e.Materials.Chip, id.ClaimDigest, e.Materials.AttestBind, tenantID, version)
+}
+
+// DEK derives the tenant key for an identity and reports the version it came
+// from. Document surfaces call this rather than deriving a key of their own, so a
+// sealed document always records the version its key was actually derived under.
+func (e *Engine) DEK(id identity.VerifiedIdentity) ([]byte, int, error) {
+	dek, err := e.deriveDEK(id)
+	if err != nil {
+		return nil, 0, err
+	}
+	return dek, e.keyVersion(), nil
+}
+
+func (e *Engine) keyVersion() int {
+	if e.Materials.KeyVersion == 0 {
+		return material.KeyVersion
+	}
+	return e.Materials.KeyVersion
 }
 
 func (e *Engine) Decrypt(id identity.VerifiedIdentity, encoded string) ([]chatstate.Message, error) {

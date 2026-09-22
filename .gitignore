@@ -40,5 +40,8 @@ vm1
 # Local / CI build trees
 /out/
 
-registry
-shim
+# Locally built binaries at the repo root. Anchored: an unanchored `shim` or
+# `registry` matches any path component, which silently hides every new file under
+# cmd/shim/ and cmd/registry/.
+/registry
+/shim
