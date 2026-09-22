@@ -109,6 +109,43 @@ func schemaFields(schema json.RawMessage) ([]string, error) {
 // each of them.
 func Fields(schema json.RawMessage) ([]string, error) { return schemaFields(schema) }
 
+// EnvelopeSchema is the schema handed to the engine as a constraint.
+//
+// The caller's schema describes the values it wants and how they must be formatted: a
+// pattern here, a number there. Used directly as a grammar it does two harmful things —
+// it coerces what the page actually prints ("USD 18,402.00" comes back as 18402, "none"
+// as null) and, with every property optional, it lets the engine stop after the first
+// field. Both were measured against a llama.cpp guest.
+//
+// What the engine is constrained to here is the *envelope*: the wrapper the prompt asks
+// for and every field name in it, each value a plain string or null. So the answer cannot
+// be prose, cannot be truncated mid-object and cannot lose a field, while the model still
+// copies what the page says. The caller's own schema is enforced where it belongs — in
+// the app, against the raw answer the receipt covers by digest.
+func EnvelopeSchema(schema json.RawMessage) (json.RawMessage, error) {
+	fields, err := schemaFields(schema)
+	if err != nil {
+		return nil, err
+	}
+	properties := make(map[string]any, len(fields))
+	for _, field := range fields {
+		properties[field] = map[string]any{"type": []string{"string", "null"}}
+	}
+	return json.Marshal(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"fields": map[string]any{
+				"type":                 "object",
+				"properties":           properties,
+				"required":             fields,
+				"additionalProperties": false,
+			},
+		},
+		"required":             []string{"fields"},
+		"additionalProperties": false,
+	})
+}
+
 // Parse reads the model's answer.
 //
 // An answer wrapped in prose or a code fence is tolerated because a caller cannot

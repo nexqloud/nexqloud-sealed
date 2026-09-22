@@ -70,6 +70,13 @@ func (v *VLLM) complete(req Request, stream bool, emit TokenHandler) (Response, 
 	default:
 		payload["messages"] = []Message{}
 	}
+	if req.DisableThinking {
+		// A model that deliberates before answering puts its reasoning on the same
+		// token budget, and llama.cpp keeps that reasoning out of the content field —
+		// so a capped read comes back empty with finish_reason=length. The kwarg goes
+		// to the chat template; a template that has no such switch ignores it.
+		payload["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
+	}
 	if req.Temperature != nil {
 		payload["temperature"] = *req.Temperature
 	}

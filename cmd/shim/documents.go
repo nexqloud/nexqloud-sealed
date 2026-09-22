@@ -630,6 +630,15 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The engine is constrained to the answer's *shape*, not to the caller's value
+	// formatting: used directly as a grammar, a caller's schema coerces what the page
+	// prints and lets the engine stop after one field. See extract.EnvelopeSchema.
+	constraint, err := extract.EnvelopeSchema(req.Schema)
+	if err != nil {
+		http.Error(w, "schema cannot describe an extraction", http.StatusBadRequest)
+		return
+	}
+
 	temperature := 0.0
 	maxTokens := maxExtractTokens
 	if s.engine.Inference == nil {
@@ -642,11 +651,14 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 		Prompt:         prompt,
 		Temperature:    &temperature,
 		MaxTokens:      &maxTokens,
-		JSONSchema:     string(req.Schema),
+		JSONSchema:     string(constraint),
 		Logprobs:       true,
 		TopLogprobs:    extractTopLogprobs,
 		TenantID:       id.TenantID,
 		ChallengeNonce: strings.TrimSpace(req.ChallengeNonce),
+		// A read is an answer to a question, not a deliberation: reasoning spends the
+		// token budget and leaves no content to read.
+		DisableThinking: true,
 	})
 	if err != nil {
 		log.Printf("document extract: inference: %v", err)

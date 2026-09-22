@@ -30,6 +30,13 @@ type Request struct {
 	// wrote. That is what turns a self-reported confidence into a measured one.
 	Logprobs    bool `json:"logprobs,omitempty"`
 	TopLogprobs int  `json:"top_logprobs,omitempty"`
+
+	// DisableThinking asks the engine not to deliberate before answering. A reasoning
+	// model spends its token budget on hidden reasoning first, and the caller's budget
+	// is spent before any answer text exists: a document read comes back empty with
+	// finish_reason=length. A read wants a constrained answer, not a monologue, so the
+	// document path sets this and chat leaves it alone.
+	DisableThinking bool `json:"-"`
 }
 
 // TokenLogprob is the engine's own opinion of one token it wrote.

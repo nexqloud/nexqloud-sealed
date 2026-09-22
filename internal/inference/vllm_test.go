@@ -110,6 +110,49 @@ func TestCompleteNeverSendsMessagesAsNull(t *testing.T) {
 	}
 }
 
+func TestCompleteDisablesThinkingWhenTheCallerAsks(t *testing.T) {
+	// A reasoning model spends the budget deliberating and leaves no content; llama.cpp
+	// keeps that reasoning out of the message, so a read comes back empty. The switch
+	// goes to the chat template, which is where models expose it.
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		w.Write([]byte(`{"choices":[{"message":{"content":"{}"}}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewVLLM(srv.URL)
+	if _, err := client.Complete(Request{Model: "m", Prompt: "read a form", DisableThinking: true}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	kwargs, ok := got["chat_template_kwargs"].(map[string]any)
+	if !ok {
+		t.Fatalf("chat_template_kwargs not sent: %v", got)
+	}
+	if enabled, present := kwargs["enable_thinking"]; !present || enabled != false {
+		t.Fatalf("enable_thinking = %v (present=%v), want false", enabled, present)
+	}
+}
+
+func TestCompleteLeavesThinkingAloneByDefault(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		w.Write([]byte(`{"choices":[{"message":{"content":"{}"}}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewVLLM(srv.URL)
+	if _, err := client.Complete(Request{Model: "m", Prompt: "hello"}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if _, present := got["chat_template_kwargs"]; present {
+		t.Fatalf("chat is not ours to change, but chat_template_kwargs was sent: %v", got)
+	}
+}
+
 func TestCompleteRejectsAnInvalidSchema(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("the request should never have been sent")

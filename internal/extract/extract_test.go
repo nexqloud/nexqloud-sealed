@@ -286,6 +286,62 @@ func TestTrimToJSON(t *testing.T) {
 	}
 }
 
+func TestEnvelopeSchemaConstrainsTheShapeNotTheValues(t *testing.T) {
+	// A caller's pattern or number type must not reach the engine as a grammar: measured
+	// against a llama.cpp guest, that coerced "USD 18,402.00" to 18402 and "none" to null.
+	schema := json.RawMessage(`{"type":"object","properties":{` +
+		`"hts_10":{"type":["string","null"],"pattern":"^\\d{10}$"},` +
+		`"duty_paid_usd":{"type":["number","null"]}}}`)
+
+	got, err := EnvelopeSchema(schema)
+	if err != nil {
+		t.Fatalf("EnvelopeSchema: %v", err)
+	}
+
+	var envelope struct {
+		Required   []string `json:"required"`
+		Properties map[string]struct {
+			Required             []string `json:"required"`
+			AdditionalProperties bool     `json:"additionalProperties"`
+			Properties           map[string]struct {
+				Type []string `json:"type"`
+			} `json:"properties"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(got, &envelope); err != nil {
+		t.Fatalf("envelope is not json: %v", err)
+	}
+
+	if len(envelope.Required) != 1 || envelope.Required[0] != "fields" {
+		t.Fatalf("envelope required = %v, want [fields]", envelope.Required)
+	}
+	fields, ok := envelope.Properties["fields"]
+	if !ok {
+		t.Fatalf("envelope has no fields object: %s", got)
+	}
+	if strings.Join(fields.Required, ",") != "duty_paid_usd,hts_10" {
+		t.Fatalf("fields required = %v, want both fields so none can be dropped", fields.Required)
+	}
+	if fields.AdditionalProperties {
+		t.Fatal("extra fields must not be allowed")
+	}
+	for name, property := range fields.Properties {
+		if strings.Join(property.Type, "|") != "string|null" {
+			t.Fatalf("%s type = %v, want string|null so the page's own text survives", name, property.Type)
+		}
+	}
+	if body := string(got); strings.Contains(body, "pattern") || strings.Contains(body, "number") {
+		t.Fatalf("caller formatting leaked into the grammar: %s", body)
+	}
+}
+
+func TestEnvelopeSchemaRefusesAnUnusableSchema(t *testing.T) {
+	_, err := EnvelopeSchema(json.RawMessage(`{"type":"object"}`))
+	if !errors.Is(err, ErrUnusableSchema) {
+		t.Fatalf("err = %v, want ErrUnusableSchema", err)
+	}
+}
+
 func TestUnusableSchemaErrorIsIdentifiable(t *testing.T) {
 	_, err := BuildPrompt(json.RawMessage(`{"type":"object"}`), documentText)
 	if !errors.Is(err, ErrUnusableSchema) {
