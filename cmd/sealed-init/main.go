@@ -27,6 +27,11 @@ func main() {
 	_ = os.MkdirAll("/tmp", 0755)
 	_ = os.MkdirAll("/sys/kernel/config", 0755)
 
+	// The guest runs no shell, but the shim execs helpers by name (poppler's
+	// pdftoppm/pdftotext for the document doors). Without a PATH, a bare
+	// "pdftoppm" cannot be looked up; the host env file can still override this.
+	_ = os.Setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+
 	_ = syscall.Mount("devtmpfs", "/dev", "devtmpfs", 0, "")
 	_ = syscall.Mount("proc", "/proc", "proc", 0, "")
 	_ = syscall.Mount("sysfs", "/sys", "sysfs", 0, "")

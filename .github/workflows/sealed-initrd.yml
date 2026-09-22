@@ -81,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq zstd cpio gzip python3-venv ca-certificates curl unzip
+          sudo apt-get install -y -qq zstd cpio gzip python3-venv ca-certificates curl unzip poppler-utils fontconfig fonts-dejavu-core
 
       - name: Install AWS CLI (R2 S3 API)
         if: github.event_name != 'pull_request'

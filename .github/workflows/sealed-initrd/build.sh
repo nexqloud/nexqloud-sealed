@@ -39,6 +39,12 @@ fi
 printf '%s\n' 'hosts: files dns' > "${STAGE}/etc/nsswitch.conf"
 printf '%s\n' '127.0.0.1 localhost' '::1 localhost' > "${STAGE}/etc/hosts"
 
+# The document doors execute the converter inside this guest (ingest renders the
+# pages, extract reads the text layer), so poppler, its dynamic closure, fonts and
+# fontconfig are part of the measured rootfs — not of the shim container image.
+echo "==> staging poppler for the document doors"
+"${SCRIPT_DIR}/stage-poppler.sh" "${STAGE}"
+
 echo "==> packing sealed-initrd.img"
 (
   cd "${STAGE}"
