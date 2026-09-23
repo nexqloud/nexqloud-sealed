@@ -116,10 +116,12 @@ arrive with no relationship to each other.
 ### `POST /v1/documents/{document_id}/read-key`
 
 ```
-in   { document_id, purpose, ttl_seconds, recipient_public_key, source_url, challenge_nonce? }
+in   { document_id, purpose, ttl_seconds, recipient_public_key, source_url, challenge_nonce?,
+       page?, fields? }
 out  a sealed-document container:
-       part "source"  the grant — the session key wrapped to the recipient, with its expiry
-       parts "page-*" the page renders, re-sealed under that session key
+       part "source"    the grant — the session key wrapped to the recipient, with its expiry
+       parts "page-*"   the page renders, re-sealed under that session key
+       parts "<field>"  one piece per located value, cut from its page, re-sealed
 ```
 
 For the human review screen: a short-lived key that opens one document's page renders, addressed to
@@ -142,6 +144,24 @@ through the caller's database.
 `purpose` is `review` or absent, which means `review`. A lifetime outside 30 s–15 min is cut to the
 boundary, and an unstated one means 5 minutes. Only page renders are ever re-sealed — never the source
 document, which no reviewer needs in order to check a field.
+
+**A reviewer is shown the claim's regions and nothing else.** `page: "redacted"` with `fields` — the
+fields under review, with each value as the caller stored it — makes this handler locate those values
+in the document it holds and paint **everything else** out of every page render before sealing one to
+the recipient (`internal/redact`). The caller is the side that knows what the claim is worked out
+from; this side only finds them and removes the rest, so no rule about tariffs lives here.
+
+The replacement for a whole page is what makes the rest of the promise true: `header.redacted` is set
+when the pages were painted out, a reader must refuse a page part that is not declared redacted, and
+`fields` become one named piece each so a reviewer can look at a single value closely. The grant
+covers the pages actually returned, so an unredacted render of a secret document never leaves the
+enclave.
+
+Two outcomes are normal and are reported rather than worked around. A document whose values cannot be
+located at all — a **scan** has no text to look in — comes back with **no page parts** and a receipt
+covering zero pages: it is not shown unredacted instead. And a value the form does not print as stored
+(a checkbox, a line number, a number under four digits) is simply not located, which is recorded and
+the page is redacted to the rest.
 
 #### What a grant is worth, honestly
 

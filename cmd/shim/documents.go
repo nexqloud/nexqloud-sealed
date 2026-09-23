@@ -23,6 +23,7 @@ import (
 	"nexqloud-sealed/internal/keyscope"
 	"nexqloud-sealed/internal/readkey"
 	"nexqloud-sealed/internal/receipt"
+	"nexqloud-sealed/internal/redact"
 	"nexqloud-sealed/internal/render"
 	"nexqloud-sealed/pkg/docwire"
 )
@@ -211,6 +212,13 @@ type readKeyRequest struct {
 	RecipientPublicKey string `json:"recipient_public_key"`
 	SourceURL          string `json:"source_url"`
 	ChallengeNonce     string `json:"challenge_nonce,omitempty"`
+	// Page selects what comes back. The only value served is "redacted": the regions of the values
+	// below, with everything else painted out. An unstated or unknown mode gets no page at all, so
+	// there is no request that returns a whole document.
+	Page string `json:"page,omitempty"`
+	// Fields is what the person at that browser is reviewing, with each value as the application
+	// stored it. The enclave locates them and shows nothing else.
+	Fields map[string]any `json:"fields,omitempty"`
 }
 
 // handleDocumentReadKey issues a short-lived key that opens one document's page
@@ -301,7 +309,7 @@ func (s *server) handleDocumentReadKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cannot read the sealed document", http.StatusBadGateway)
 		return
 	}
-	header, _, sealedPages, err := docwire.Decode(bytes.NewReader(container))
+	header, sealedSource, sealedPages, err := docwire.Decode(bytes.NewReader(container))
 	if err != nil {
 		log.Printf("document read-key: container: %v", err)
 		http.Error(w, "stored bytes are not a sealed document", http.StatusUnprocessableEntity)
@@ -338,6 +346,28 @@ func (s *server) handleDocumentReadKey(w http.ResponseWriter, r *http.Request) {
 		pages = append(pages, page)
 	}
 
+	// A reviewer is not shown the whole document. When the caller says what is under review, every
+	// other part of every page is painted out here — in the one place the plaintext exists — and only
+	// the redacted renders are sealed to them. A document whose regions cannot be found (a scan has no
+	// text to look in) is not sent at all rather than sent whole, and the grant then covers no pages.
+	var pieceParts []docwire.Named
+	redacted := false
+	if req.Page == pageModeRedacted && len(req.Fields) > 0 {
+		painted, pieces, located, rerr := s.redactForReview(r.Context(), dek, keyVersion, sealedSource, pages, req.Fields)
+		switch {
+		case errors.Is(rerr, redact.ErrNoText), errors.Is(rerr, redact.ErrNoRegion):
+			log.Printf("document read-key: nothing of this document can be shown: %v", rerr)
+			pages = nil
+		case rerr != nil:
+			log.Printf("document read-key: redact: %v", rerr)
+			http.Error(w, "cannot prepare a redacted page for this review", http.StatusUnprocessableEntity)
+			return
+		default:
+			log.Printf("document read-key: redacted to %d field(s), %d page(s), %d piece(s)", located, len(painted), len(pieces))
+			pages, pieceParts, redacted = painted, pieces, true
+		}
+	}
+
 	grant, err := readkey.Issue(recipient, documentID, purpose, keyVersion, len(pages), readkey.ClampTTL(req.TTLSeconds), time.Now())
 	if err != nil {
 		log.Printf("document read-key: issue: %v", err)
@@ -369,6 +399,7 @@ func (s *server) handleDocumentReadKey(w http.ResponseWriter, r *http.Request) {
 		DocumentID:   documentID,
 		KeyVersion:   keyVersion,
 		DetectedType: "read-key-grant",
+		Redacted:     redacted,
 	}
 	promptLine := canonicalReadKeyPrompt(documentID, purpose, keyVersion, len(pages), grant.Wrapped.TTLSeconds, grant.Wrapped.RecipientSHA256)
 	responseLine := canonicalReadKeyResponse(grant.Wrapped.Ephemeral)
@@ -376,7 +407,7 @@ func (s *server) handleDocumentReadKey(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", docwire.ContentType)
 	w.WriteHeader(http.StatusOK)
-	if err := docwire.Encode(w, out, grantJSON, resealed); err != nil {
+	if err := docwire.EncodeExtras(w, out, grantJSON, resealed, pieceParts); err != nil {
 		// The status line is already out; the caller sees a truncated container and
 		// docwire refuses it, which is the honest outcome here.
 		log.Printf("document read-key: encode: %v", err)

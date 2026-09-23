@@ -56,15 +56,21 @@ type Part struct {
 // metadata: what the document is called, which key version sealed it, and what
 // the caller should expect to find.
 type Header struct {
-	Schema       string          `json:"schema"`
-	DocumentID   string          `json:"document_id"`
-	KeyVersion   int             `json:"key_version"`
-	DetectedType string          `json:"detected_type,omitempty"`
-	Source       Part            `json:"source"`
-	Pages        []Part          `json:"pages,omitempty"`
-	ReceiptID    string          `json:"receipt_id,omitempty"`
-	Receipt      json.RawMessage `json:"sealed_receipt,omitempty"`
-	Error        string          `json:"error,omitempty"`
+	Schema       string `json:"schema"`
+	DocumentID   string `json:"document_id"`
+	KeyVersion   int    `json:"key_version"`
+	DetectedType string `json:"detected_type,omitempty"`
+	Source       Part   `json:"source"`
+	Pages        []Part `json:"pages,omitempty"`
+	// Redacted marks page renders that were painted out before they were sealed: everything the
+	// caller did not ask to see is gone from them, not hidden. A reader that shows a page has to
+	// check this and refuse a container that does not carry it.
+	Redacted bool `json:"redacted,omitempty"`
+	// Pieces are the named regions of a page, one per value under review, carried after the pages.
+	Pieces    []Part          `json:"pieces,omitempty"`
+	ReceiptID string          `json:"receipt_id,omitempty"`
+	Receipt   json.RawMessage `json:"sealed_receipt,omitempty"`
+	Error     string          `json:"error,omitempty"`
 }
 
 // PageCount is how many page renders the container carries.
@@ -83,6 +89,22 @@ func (h Header) TotalBytes() int {
 // and digests are computed here from the bytes actually written, so a caller
 // cannot describe a container that says something other than what it holds.
 func Encode(w io.Writer, h Header, source []byte, pages [][]byte) error {
+	return encodeParts(w, h, source, pages, nil)
+}
+
+// Named is a part with the name it travels under.
+type Named struct {
+	Name  string
+	Bytes []byte
+}
+
+// EncodeExtras writes a container that also carries named parts: the pieces of a page a reviewer was
+// shown. They follow the pages, in the order the header names them.
+func EncodeExtras(w io.Writer, h Header, source []byte, pages [][]byte, pieces []Named) error {
+	return encodeParts(w, h, source, pages, pieces)
+}
+
+func encodeParts(w io.Writer, h Header, source []byte, pages [][]byte, pieces []Named) error {
 	if len(source) == 0 {
 		return errors.New("docwire: empty source")
 	}
@@ -102,6 +124,17 @@ func Encode(w io.Writer, h Header, source []byte, pages [][]byte) error {
 		total += int64(len(page))
 		parts = append(parts, describe(fmt.Sprintf("page-%03d", i+1), page))
 	}
+	named := make([]Part, 0, len(pieces))
+	for _, piece := range pieces {
+		if len(piece.Bytes) == 0 {
+			return fmt.Errorf("docwire: piece %q is empty", piece.Name)
+		}
+		if len(piece.Bytes) > MaxPartBytes {
+			return fmt.Errorf("%w: piece %q is %d bytes", ErrTooLarge, piece.Name, len(piece.Bytes))
+		}
+		total += int64(len(piece.Bytes))
+		named = append(named, describe(piece.Name, piece.Bytes))
+	}
 	if total > MaxTotalBytes {
 		return fmt.Errorf("%w: %d bytes", ErrTooLarge, total)
 	}
@@ -109,6 +142,7 @@ func Encode(w io.Writer, h Header, source []byte, pages [][]byte) error {
 	h.Schema = Schema
 	h.Source = describe("source", source)
 	h.Pages = parts
+	h.Pieces = named
 
 	header, err := json.Marshal(h)
 	if err != nil {
@@ -132,6 +166,11 @@ func Encode(w io.Writer, h Header, source []byte, pages [][]byte) error {
 	}
 	for _, page := range pages {
 		if _, err := w.Write(page); err != nil {
+			return err
+		}
+	}
+	for _, piece := range pieces {
+		if _, err := w.Write(piece.Bytes); err != nil {
 			return err
 		}
 	}
@@ -170,7 +209,10 @@ func Decode(r io.Reader) (Header, []byte, [][]byte, error) {
 		return Header{}, nil, nil, fmt.Errorf("%w: schema %q", ErrNotDocwire, h.Schema)
 	}
 
+	// Every part is verified, including pieces this caller has no use for: a container that does not
+	// match its own header is not a container.
 	described := append([]Part{h.Source}, h.Pages...)
+	described = append(described, h.Pieces...)
 	blobs := make([][]byte, 0, len(described))
 	total := 0
 	for i, part := range described {
