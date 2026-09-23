@@ -7,6 +7,19 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+// Image is one picture attached to a request.
+//
+// It exists because not every document has a text layer. A scan is a picture of a form, and
+// there is nothing to quote from it: the pages themselves are what has to be read, by a model
+// served with a vision projector. The payload builder turns these into the engine's own
+// multimodal content parts; nothing here is serialized on its own.
+type Image struct {
+	// MIMEType is the image's own type, e.g. image/png.
+	MIMEType string
+	// Data is the encoded image, exactly the bytes the model is shown.
+	Data []byte
+}
+
 type Request struct {
 	Model            string    `json:"model"`
 	Prompt           string    `json:"prompt,omitempty"`
@@ -18,6 +31,10 @@ type Request struct {
 	ChallengeNonce   string    `json:"challenge_nonce,omitempty"`
 	Temperature      *float64  `json:"temperature,omitempty"`
 	MaxTokens        *int      `json:"max_tokens,omitempty"`
+
+	// Images are page pictures to read alongside Prompt. Empty means a text-only read,
+	// which is every document that has a text layer.
+	Images []Image `json:"-"`
 
 	// JSONSchema constrains the model's output to this schema. With it the model
 	// cannot emit a structurally wrong answer, so a caller does not have to detect

@@ -440,9 +440,12 @@ type extractResponse struct {
 	// measured figure rather than in place of it.
 	ModelConfidence map[string]float64 `json:"model_confidence,omitempty"`
 	Pages           int                `json:"pages"`
-	ReceiptID       string             `json:"receipt_id,omitempty"`
-	SealedReceipt   json.RawMessage    `json:"sealed_receipt,omitempty"`
-	ReceiptError    string             `json:"receipt_error,omitempty"`
+	// ReadFrom says what the read was made of: the document's text layer, or its pages as
+	// pictures. A caller that shows a person what was read needs to know which it was.
+	ReadFrom      string          `json:"read_from,omitempty"`
+	ReceiptID     string          `json:"receipt_id,omitempty"`
+	SealedReceipt json.RawMessage `json:"sealed_receipt,omitempty"`
+	ReceiptError  string          `json:"receipt_error,omitempty"`
 	// ReceiptPrompt and ReceiptResponse are the exact canonical lines the receipt's
 	// prompt_hash and response_hash cover. Returning them is what makes a receipt
 	// checkable by any caller in any language without reimplementing this enclave's
@@ -609,22 +612,61 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 		textExtractor = &render.ExecText{}
 	}
 	text, err := textExtractor.Text(r.Context(), plaintext, render.TextDefaults())
+
+	// No text layer means a scan: a picture of a form. There is nothing to quote, so the pages
+	// themselves are read — the same question, the same schema, the same measurement, asked of
+	// pictures instead of characters. What the read was made from travels in the receipt, because
+	// a text read and a picture read of the same document are different evidence.
+	readFrom := readFromText
+	var (
+		images     []inference.Image
+		imagePages []extract.PageImage
+	)
 	if err != nil {
-		switch {
-		case errors.Is(err, render.ErrNoText):
-			// A scan. Saying so is the honest answer: there is nothing to read until
-			// the page is looked at, by a person or by a vision model.
-			http.Error(w, "document has no text layer", http.StatusUnprocessableEntity)
-		case errors.Is(err, render.ErrNotPDF):
-			http.Error(w, "that object is not a PDF", http.StatusUnprocessableEntity)
-		default:
-			log.Printf("document extract: text: %v", err)
-			http.Error(w, "reading the document failed", http.StatusInternalServerError)
+		if !errors.Is(err, render.ErrNoText) {
+			switch {
+			case errors.Is(err, render.ErrNotPDF):
+				http.Error(w, "that object is not a PDF", http.StatusUnprocessableEntity)
+			default:
+				log.Printf("document extract: text: %v", err)
+				http.Error(w, "reading the document failed", http.StatusInternalServerError)
+			}
+			return
 		}
-		return
+
+		rendered, renderErr := s.pageImages(r.Context(), plaintext)
+		if renderErr != nil {
+			switch {
+			case errors.Is(renderErr, errTooManyPages):
+				// The whole document, or none of it: a person gets this one.
+				http.Error(w, renderErr.Error(), http.StatusUnprocessableEntity)
+			case errors.Is(renderErr, render.ErrNoPages):
+				http.Error(w, "no pages could be rendered from this document", http.StatusUnprocessableEntity)
+			default:
+				log.Printf("document extract: render: %v", renderErr)
+				http.Error(w, "rendering the pages failed", http.StatusInternalServerError)
+			}
+			return
+		}
+		for i, page := range rendered {
+			digest := docwire.Digest(page)
+			imagePages = append(imagePages, extract.PageImage{
+				Number:   i + 1,
+				SHA256:   digest,
+				MIMEType: "image/png",
+				Bytes:    len(page),
+			})
+			images = append(images, inference.Image{MIMEType: "image/png", Data: page})
+		}
+		readFrom = readFromPageImages
 	}
 
-	prompt, err := extract.BuildPrompt(req.Schema, text)
+	var prompt string
+	if readFrom == readFromPageImages {
+		prompt, err = extract.BuildImagePrompt(req.Schema, imagePages)
+	} else {
+		prompt, err = extract.BuildPrompt(req.Schema, text)
+	}
 	if err != nil {
 		http.Error(w, "schema cannot describe an extraction", http.StatusBadRequest)
 		return
@@ -649,6 +691,7 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 	completion, err := s.engine.Inference.Complete(inference.Request{
 		Model:          strings.TrimSpace(req.Model),
 		Prompt:         prompt,
+		Images:         images,
 		Temperature:    &temperature,
 		MaxTokens:      &maxTokens,
 		JSONSchema:     string(constraint),
@@ -679,6 +722,13 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 		source = "logprobs"
 	}
 
+	// How many pages the read actually covered: the pages with text, or the pages that were
+	// drawn and shown to the model.
+	pagesRead := len(render.PageTexts(text))
+	if readFrom == readFromPageImages {
+		pagesRead = len(images)
+	}
+
 	out := extractResponse{
 		DocumentID:       documentID,
 		SchemaID:         strings.TrimSpace(req.SchemaID),
@@ -687,12 +737,13 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 		Confidence:       measured,
 		ConfidenceSource: source,
 		ModelConfidence:  answer.Confidence,
-		Pages:            len(render.PageTexts(text)),
+		Pages:            pagesRead,
+		ReadFrom:         readFrom,
 		RawAnswer:        completion.Content,
 		AnswerSHA256:     docwire.Digest([]byte(completion.Content)),
 	}
 
-	promptLine := canonicalExtractPrompt(documentID, out.SchemaID, keyVersion, out.Pages)
+	promptLine := canonicalExtractPrompt(documentID, out.SchemaID, out.ReadFrom, keyVersion, out.Pages)
 	responseLine := canonicalExtractResponse(completion.Model, completion.Content, measured)
 	out.ReceiptPrompt = promptLine
 	out.ReceiptResponse = responseLine
@@ -709,6 +760,46 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 // what the model nearly said instead.
 const extractTopLogprobs = 3
 
+// What a read was made from, as the receipt records it.
+const (
+	// readFromText is the document's own text layer, quoted into the prompt.
+	readFromText = "text"
+	// readFromPageImages is the document's pages, drawn and attached as pictures: a scan.
+	readFromPageImages = "page_images"
+)
+
+// maxPageImageRead bounds how many pages a picture read covers.
+//
+// Pictures cost input tokens in a way text does not, and the guest's context is finite. Rather
+// than quietly reading the first few pages of a bundle and reporting it as the document, a
+// document over the bound is refused and goes to a person: half a document read as pictures,
+// with nothing saying so, is worse than an honest refusal.
+const maxPageImageRead = 8
+
+// errTooManyPages means the document has more pages than a picture read covers. The body says so,
+// with both numbers, so a caller can act on it instead of guessing at a rendering failure.
+var errTooManyPages = errors.New("too many pages to read as pictures")
+
+// pageImages draws the pages of a document inside the enclosure.
+func (s *server) pageImages(ctx context.Context, pdf []byte) ([][]byte, error) {
+	renderer := s.renderer
+	if renderer == nil {
+		renderer = &render.Exec{}
+	}
+	opts := render.DefaultOptions()
+	// One more than the bound, so "too long" can be told apart from "exactly at the bound".
+	opts.MaxPages = maxPageImageRead + 1
+	pages, err := renderer.Pages(ctx, pdf, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(pages) > maxPageImageRead {
+		return nil, fmt.Errorf("%w: %d pages, this deployment reads up to %d as pictures",
+			errTooManyPages, len(pages), maxPageImageRead)
+	}
+	return pages, nil
+}
+
 // maxExtractRequestBytes bounds the extraction request. The document is not in it —
 // only a URL and a schema — so this is generous.
 const maxExtractRequestBytes = 1 << 20
@@ -721,11 +812,16 @@ func (s *server) fetchSealed(ctx context.Context, url string) ([]byte, error) {
 	return fetcher.Fetch(ctx, url)
 }
 
-// canonicalExtractPrompt is what the receipt's prompt_hash covers: which document,
-// under which schema and key version.
-func canonicalExtractPrompt(documentID, schemaID string, keyVersion, pages int) string {
-	return fmt.Sprintf("sealed-document/1|document.extract|id=%s|schema=%s|key_version=%d|pages=%d",
-		documentID, schemaID, keyVersion, pages)
+// canonicalExtractPrompt is what prompt_hash covers: the document, the schema it was read
+// against, how it was read, and how many pages that covered.
+//
+// The read mode is in the line because it changes what the evidence is. A form whose text layer
+// was quoted and a scan whose pages were looked at are not the same read, even for the same
+// document and schema, and a receipt that could not tell them apart would let either pass for the
+// other.
+func canonicalExtractPrompt(documentID, schemaID, readFrom string, keyVersion, pages int) string {
+	return fmt.Sprintf("sealed-document/1|document.extract|id=%s|schema=%s|read=%s|key_version=%d|pages=%d",
+		documentID, schemaID, readFrom, keyVersion, pages)
 }
 
 // canonicalExtractResponse is what response_hash covers: which model read the

@@ -356,3 +356,74 @@ func concat(tokens []inference.TokenLogprob) string {
 	}
 	return b.String()
 }
+
+// kindSchema mirrors what the tariff app sends to ask what a document is: one choice, with the
+// options written out in the description because the ids alone say nothing to a model.
+const kindSchema = `{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "description": "which of these the page is, exactly one of: cbp_7501 = CBP 7501 entry summary; commercial_invoice = commercial invoice; other = none of these",
+      "enum": ["cbp_7501", "commercial_invoice", "bill_of_lading", "packing_list", "export_proof_eei", "other"]
+    },
+    "what_it_is": {"type": ["string", "null"], "description": "the document's own title as printed, in one line"}
+  },
+  "required": ["kind"]
+}`
+
+func TestBuildPromptCarriesWhatTheCallerSaidAboutAField(t *testing.T) {
+	// The live failure this guards: asked for `kind` on a page that plainly reads COMMERCIAL
+	// INVOICE, the engine answered null, because the prompt listed the field's name and nothing
+	// else — the descriptions callers write never reached the model.
+	prompt, err := BuildPrompt(json.RawMessage(kindSchema), "MERIDIAN HARDWARE GMBH\nCOMMERCIAL INVOICE\n")
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	if !strings.Contains(prompt, "- kind: which of these the page is") {
+		t.Fatalf("the field's description is missing from the prompt:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, `(one of: "cbp_7501", "commercial_invoice", "bill_of_lading", "packing_list", "export_proof_eei", "other")`) {
+		t.Fatalf("the closed set of values is missing from the prompt:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "- what_it_is: the document's own title as printed") {
+		t.Fatalf("a second field's description is missing from the prompt:\n%s", prompt)
+	}
+	// A field the caller said nothing about still reads as a bare name.
+	if _, err := BuildPrompt(json.RawMessage(eeiSchema), documentText); err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+}
+
+func TestEnvelopeSchemaKeepsAClosedSetAndStillDropsTheFormatting(t *testing.T) {
+	// A choice has to be closed for the answer to be one of the things the caller asked for;
+	// a pattern still must not reach the engine, because a pattern coerces page text.
+	got, err := EnvelopeSchema(json.RawMessage(kindSchema))
+	if err != nil {
+		t.Fatalf("EnvelopeSchema: %v", err)
+	}
+
+	var envelope struct {
+		Properties map[string]struct {
+			Properties map[string]struct {
+				Type []string `json:"type"`
+				Enum []any    `json:"enum"`
+			} `json:"properties"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(got, &envelope); err != nil {
+		t.Fatalf("envelope is not json: %v", err)
+	}
+	kind := envelope.Properties["fields"].Properties["kind"]
+	if len(kind.Enum) != 7 || kind.Enum[0] != "cbp_7501" || kind.Enum[6] != nil {
+		t.Fatalf("kind enum = %v, want the six kinds and null", kind.Enum)
+	}
+	if strings.Join(kind.Type, "|") != "string|null" {
+		t.Fatalf("kind type = %v, want string|null so the page's own text survives", kind.Type)
+	}
+	// null stays legal: "no answer" has to remain visible rather than forced into a kind.
+	if body := string(got); strings.Contains(body, "pattern") {
+		t.Fatalf("caller formatting leaked into the grammar: %s", body)
+	}
+}

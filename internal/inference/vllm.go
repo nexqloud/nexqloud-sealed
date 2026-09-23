@@ -3,6 +3,7 @@ package inference
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,6 +38,29 @@ func (v *VLLM) dialect() Dialect {
 	return DialectLlamaCpp
 }
 
+// contentParts builds the content array for a multimodal read: the words first, then each page
+// picture as a data URL, in the order the pages came.
+//
+// This is the shape llama.cpp's server reads images in from a model with a vision projector. The
+// pictures are base64 in the request body, so they never touch disk and never leave the enclosure.
+func contentParts(prompt string, images []Image) []map[string]any {
+	parts := make([]map[string]any, 0, len(images)+1)
+	parts = append(parts, map[string]any{"type": "text", "text": prompt})
+	for _, image := range images {
+		mimeType := strings.TrimSpace(image.MIMEType)
+		if mimeType == "" {
+			mimeType = "image/png"
+		}
+		parts = append(parts, map[string]any{
+			"type": "image_url",
+			"image_url": map[string]any{
+				"url": "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(image.Data),
+			},
+		})
+	}
+	return parts
+}
+
 func NewVLLM(baseURL string) *VLLM {
 	return &VLLM{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -63,6 +87,15 @@ func (v *VLLM) complete(req Request, stream bool, emit TokenHandler) (Response, 
 	// document extraction dies with a 400 while chat, which always fills Messages,
 	// keeps working.
 	switch {
+	case len(req.Images) > 0:
+		// A read of a document with no text layer: the words and the page pictures travel in
+		// one user turn. An engine served without a vision projector rejects the request
+		// rather than ignoring the pictures, which is the failure worth having — a read that
+		// silently went text-only would answer from nothing.
+		payload["messages"] = []map[string]any{{
+			"role":    "user",
+			"content": contentParts(req.Prompt, req.Images),
+		}}
 	case len(req.Messages) > 0:
 		payload["messages"] = req.Messages
 	case strings.TrimSpace(req.Prompt) != "":

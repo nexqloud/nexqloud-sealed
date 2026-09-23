@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"nexqloud-sealed/internal/inference"
@@ -27,6 +28,10 @@ import (
 
 // ErrUnusableSchema means the caller's schema cannot describe an extraction.
 var ErrUnusableSchema = errors.New("extract: schema has no properties")
+
+// ErrNoPages means an image read was asked for with nothing to attach. A document that renders no
+// pages cannot be read as pictures, and an empty picture set is not a read at all.
+var ErrNoPages = errors.New("extract: no pages to attach")
 
 // Request is one document read.
 type Request struct {
@@ -64,16 +69,8 @@ func BuildPrompt(schema json.RawMessage, document string) (string, error) {
 	}
 
 	var b strings.Builder
-	b.WriteString("You read one customs document and return the fields printed on it.\n")
-	b.WriteString("Use only what is printed on the page. Do not infer, normalise, reformat or complete a value.\n")
-	b.WriteString("If a value is not printed, use null for it — never a guess and never a placeholder.\n")
-	b.WriteString("\n")
-	b.WriteString(`Answer with one JSON object and nothing else: {"fields": {"<field>": <value>, ...}}`)
-	b.WriteString("\n\n")
-	b.WriteString("The fields are:\n")
-	for _, field := range fields {
-		fmt.Fprintf(&b, "  - %s\n", field)
-	}
+	writeReadHeader(&b)
+	writeFieldList(&b, fields, schemaFieldNotes(schema))
 	b.WriteString("\n")
 	b.WriteString("The document text follows. A form feed marks a page break.\n")
 	b.WriteString("<<<DOCUMENT\n")
@@ -83,6 +80,78 @@ func BuildPrompt(schema json.RawMessage, document string) (string, error) {
 	}
 	b.WriteString("DOCUMENT>>>\n")
 	return b.String(), nil
+}
+
+// PageImage describes one page picture attached to a read.
+//
+// The digest travels in the prompt on purpose: the receipt's prompt_hash covers the prompt string,
+// and the pictures are not in it. Naming each page by its sha256 is what ties the receipt to the
+// exact pictures that were read, rather than to a question that could have been asked of anything.
+type PageImage struct {
+	Number   int
+	SHA256   string
+	MIMEType string
+	Bytes    int
+}
+
+// BuildImagePrompt is BuildPrompt for a document that has no text layer.
+//
+// A scan is a picture of a form. There is no text to quote, so the pages themselves go to the
+// model — the same question, the same schema, the same measurement, asked of pictures. The prompt
+// says so, and names every page it is attaching.
+func BuildImagePrompt(schema json.RawMessage, pages []PageImage) (string, error) {
+	fields, err := schemaFields(schema)
+	if err != nil {
+		return "", err
+	}
+	if len(pages) == 0 {
+		return "", ErrNoPages
+	}
+
+	var b strings.Builder
+	writeReadHeader(&b)
+	b.WriteString("This document has no text layer. Its pages are attached to this request as images, in\n")
+	b.WriteString("order, and they are the document: read what is printed on them, not a transcription of them.\n")
+	b.WriteString("\n")
+	writeFieldList(&b, fields, schemaFieldNotes(schema))
+	b.WriteString("\n")
+	b.WriteString("The attached pages are:\n")
+	for _, page := range pages {
+		mimeType := strings.TrimSpace(page.MIMEType)
+		if mimeType == "" {
+			mimeType = "image/png"
+		}
+		fmt.Fprintf(&b, "  - page %d: %s, %d bytes, sha256=%s\n", page.Number, mimeType, page.Bytes, page.SHA256)
+	}
+	return b.String(), nil
+}
+
+// writeReadHeader is the instruction every read shares, worded the same for text and pictures.
+func writeReadHeader(b *strings.Builder) {
+	b.WriteString("You read one customs document and return the fields printed on it.\n")
+	b.WriteString("Use only what is printed on the page. Do not infer, normalise, reformat or complete a value.\n")
+	b.WriteString("If a value is not printed, use null for it — never a guess and never a placeholder.\n")
+	b.WriteString("\n")
+	b.WriteString(`Answer with one JSON object and nothing else: {"fields": {"<field>": <value>, ...}}`)
+	b.WriteString("\n\n")
+}
+
+// writeFieldList names the fields, with whatever the caller wrote about each of them.
+func writeFieldList(b *strings.Builder, fields []string, notes map[string]schemaFieldNote) {
+	b.WriteString("The fields are:\n")
+	for _, field := range fields {
+		note := notes[field]
+		switch {
+		case note.Description != "" && len(note.Enum) > 0:
+			fmt.Fprintf(b, "  - %s: %s (one of: %s)\n", field, note.Description, quoted(note.Enum))
+		case note.Description != "":
+			fmt.Fprintf(b, "  - %s: %s\n", field, note.Description)
+		case len(note.Enum) > 0:
+			fmt.Fprintf(b, "  - %s (one of: %s)\n", field, quoted(note.Enum))
+		default:
+			fmt.Fprintf(b, "  - %s\n", field)
+		}
+	}
 }
 
 // schemaFields lists a schema's property names, sorted so the same schema always
@@ -109,6 +178,58 @@ func schemaFields(schema json.RawMessage) ([]string, error) {
 // each of them.
 func Fields(schema json.RawMessage) ([]string, error) { return schemaFields(schema) }
 
+// schemaFieldNote is what the caller said about one field, in the words the model needs.
+type schemaFieldNote struct {
+	Description string
+	Enum        []any
+}
+
+// schemaFieldNotes reads each property's description and, when the caller declared one, the
+// closed set of values it may hold.
+//
+// Listing fields by name is not always enough. On a document read it usually is: a field called
+// `duty_paid_usd` says what it holds, and the page supplies the rest. It is not enough when the
+// answer is a *choice*: asked for `kind` with no list of kinds and a page that plainly reads
+// COMMERCIAL INVOICE, the engine answered null and the read was thrown away. What the caller
+// wrote about a field is the only place that list can come from, so it is carried into the
+// prompt — the descriptions the callers wrote were never reaching the model.
+func schemaFieldNotes(schema json.RawMessage) map[string]schemaFieldNote {
+	var parsed struct {
+		Properties map[string]struct {
+			Description string `json:"description"`
+			Enum        []any  `json:"enum"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schema, &parsed); err != nil {
+		return nil
+	}
+	notes := make(map[string]schemaFieldNote, len(parsed.Properties))
+	for name, property := range parsed.Properties {
+		note := schemaFieldNote{
+			Description: strings.TrimSpace(property.Description),
+			Enum:        property.Enum,
+		}
+		if note.Description == "" && len(note.Enum) == 0 {
+			continue
+		}
+		notes[name] = note
+	}
+	return notes
+}
+
+// quoted renders an allowed-value list the way the prompt should read it.
+func quoted(values []any) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		if text, ok := value.(string); ok {
+			parts = append(parts, strconv.Quote(text))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%v", value))
+	}
+	return strings.Join(parts, ", ")
+}
+
 // EnvelopeSchema is the schema handed to the engine as a constraint.
 //
 // The caller's schema describes the values it wants and how they must be formatted: a
@@ -127,9 +248,19 @@ func EnvelopeSchema(schema json.RawMessage) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	notes := schemaFieldNotes(schema)
 	properties := make(map[string]any, len(fields))
 	for _, field := range fields {
-		properties[field] = map[string]any{"type": []string{"string", "null"}}
+		value := map[string]any{"type": []string{"string", "null"}}
+		// A caller's closed set of values is the one constraint that survives: it cannot
+		// coerce what a page prints — which is exactly why patterns and number types are
+		// dropped above — and it is what makes a *choice* (this document is one of these
+		// kinds) closed rather than open-ended. null stays legal, so "no answer" is still an
+		// answer a caller can see and route to review.
+		if values := notes[field].Enum; len(values) > 0 {
+			value["enum"] = append(append([]any{}, values...), nil)
+		}
+		properties[field] = value
 	}
 	return json.Marshal(map[string]any{
 		"type": "object",

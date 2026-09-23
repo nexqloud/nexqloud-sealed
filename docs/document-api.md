@@ -10,7 +10,9 @@ builds against, so it is worth arguing with — but it is no longer a proposal.
 `/v1/chat/completions` is the only data door the shim has today. It is the wrong shape for documents:
 
 - it carries thread state (`encrypted_payload`) that a one-shot extraction has no use for;
-- its content is a plain string, so no image can be sent and a scanned page cannot be read;
+- its content is a plain string, so no picture can be attached to it — which is why a scan is not
+  read through the chat door at all: the documents door draws the pages inside the enclosure and
+  attaches them to the read itself;
 - it has no schema or grammar, so a caller smuggles the schema into the prompt and validates the
   reply itself — a malformed reply becomes an unusable record;
 - it has no logprobs, so per-field confidence is the model's opinion rather than something measured;
@@ -219,8 +221,12 @@ unchanged. Outside dev mode a missing report is still a hard error.
    customer rather than implying otherwise. What remains open is whether a grant should be bound to a
    single page count or a single browser tab, and whether an explicit `revoke` (receipted, advisory)
    is worth having.
-4. **Scanned pages.** `pdftotext` returns nothing for a scan and extract answers 422 "no text layer".
-   A vision model inside the enclosure is the fix; the seam (`internal/render`) is where it belongs.
+4. **Scanned pages.** `pdftotext` returns nothing for a scan, so the documents door draws the pages
+   (`pdftoppm`, 200 DPI, one more than the bound so "too long" is distinguishable) and attaches them
+   to the same read — same schema, same measurement, same receipt, which records `read=page_images`.
+   An engine served without a vision projector rejects the request rather than silently answering
+   from nothing. Open: nobody has measured a picture read's accuracy against a hand-checked set yet,
+   and the 8-page bound is a guess at the guest's context rather than a measured limit.
 5. **Where the grammars come from.** The schema is handed to the engine per call. If extraction quality
    needs hand-written GBNF rather than a generated schema grammar, that is a `Request.Grammar` field
    away — it is already plumbed through.

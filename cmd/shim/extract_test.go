@@ -346,17 +346,116 @@ func partOf(name string, blob []byte) docwire.Part {
 	return docwire.Part{Name: name, Bytes: len(blob), SHA256: docwire.Digest(blob)}
 }
 
-func TestHandleDocumentExtractSaysWhenThereIsNoTextToRead(t *testing.T) {
-	srv, fixture, _, _ := extractServer(t)
+// pageStub is the page-renderer seam: it stands in for poppler and records the bound it was given.
+type pageStub struct {
+	pages [][]byte
+	err   error
+	opts  render.Options
+}
+
+func (p *pageStub) Pages(_ context.Context, _ []byte, opts render.Options) ([][]byte, error) {
+	p.opts = opts
+	if p.err != nil {
+		return nil, p.err
+	}
+	return p.pages, nil
+}
+
+func TestHandleDocumentExtractReadsAScanAsPageImages(t *testing.T) {
+	// A scan has no text layer to quote. The pages are drawn and attached instead: the same
+	// schema, the same measurement, and a receipt that says which of the two it was.
+	srv, fixture, _, model := extractServer(t)
 	srv.text = &textStub{err: render.ErrNoText}
+	pages := &pageStub{pages: [][]byte{pngPage("page 1"), pngPage("page 2")}}
+	srv.renderer = pages
+
+	rec := httptest.NewRecorder()
+	srv.handleDocumentExtract(rec, extractRequestWith(extractBody(fixture)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	var out extractResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("response is not json: %v", err)
+	}
+	if out.ReadFrom != readFromPageImages {
+		t.Fatalf("read_from = %q, want %q", out.ReadFrom, readFromPageImages)
+	}
+	if out.Pages != 2 {
+		t.Fatalf("pages = %d, want the two pages that were read", out.Pages)
+	}
+	if len(model.req.Images) != 2 {
+		t.Fatalf("the model was given %d page image(s), want 2", len(model.req.Images))
+	}
+	for i, image := range model.req.Images {
+		if !bytes.Equal(image.Data, pages.pages[i]) {
+			t.Fatalf("page %d is not the picture that was rendered", i+1)
+		}
+		if image.MIMEType != "image/png" {
+			t.Fatalf("page %d mime type = %q", i+1, image.MIMEType)
+		}
+	}
+	if !strings.Contains(model.req.Prompt, "attached to this request as images") {
+		t.Fatalf("the prompt does not say the pages are attached:\n%s", model.req.Prompt)
+	}
+	// Every page's digest is in the prompt, which is what ties the receipt to these pictures.
+	for i, page := range pages.pages {
+		if !strings.Contains(model.req.Prompt, "sha256="+docwire.Digest(page)) {
+			t.Fatalf("page %d's digest is not in the prompt: %s", i+1, model.req.Prompt)
+		}
+	}
+	if !strings.Contains(out.ReceiptPrompt, "|read="+readFromPageImages+"|") {
+		t.Fatalf("the receipt line does not say how the document was read: %s", out.ReceiptPrompt)
+	}
+	if !strings.Contains(out.ReceiptPrompt, "|pages=2") {
+		t.Fatalf("the receipt line does not cover the pages read: %s", out.ReceiptPrompt)
+	}
+	// The answer is read exactly as a text read's answer is.
+	if out.Fields["hts_10"] != "8207301500" {
+		t.Fatalf("fields = %v", out.Fields)
+	}
+	if out.Confidence["qty"] == 0 {
+		t.Fatalf("confidence = %v, want the measured value", out.Confidence)
+	}
+
+	t.Run("a text read stays a text read", func(t *testing.T) {
+		srv, fixture, _, model := extractServer(t)
+		rec := httptest.NewRecorder()
+		srv.handleDocumentExtract(rec, extractRequestWith(extractBody(fixture)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body.String())
+		}
+		if len(model.req.Images) != 0 {
+			t.Fatalf("a document with a text layer was sent as %d image(s)", len(model.req.Images))
+		}
+		if !strings.Contains(model.req.Prompt, extractDocumentText) {
+			t.Fatal("the text layer is not in the prompt")
+		}
+	})
+}
+
+func TestHandleDocumentExtractRefusesAScanLongerThanItReads(t *testing.T) {
+	// Reading the first few pages of a bundle and calling it the document would be a half-truth
+	// dressed as a read, so a document over the bound is refused and names both numbers.
+	srv, fixture, _, model := extractServer(t)
+	srv.text = &textStub{err: render.ErrNoText}
+	tooMany := make([][]byte, 0, maxPageImageRead+1)
+	for i := 0; i <= maxPageImageRead; i++ {
+		tooMany = append(tooMany, pngPage("page"))
+	}
+	srv.renderer = &pageStub{pages: tooMany}
 
 	rec := httptest.NewRecorder()
 	srv.handleDocumentExtract(rec, extractRequestWith(extractBody(fixture)))
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status %d, want 422", rec.Code)
+		t.Fatalf("status %d, want 422: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "no text layer") {
-		t.Fatalf("body = %q, want it to say the document has no text", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "reads up to") {
+		t.Fatalf("body = %q, want it to name the bound", rec.Body.String())
+	}
+	if model.req.Prompt != "" {
+		t.Fatal("the model was asked to read a document that is over the bound")
 	}
 }
 
@@ -596,13 +695,13 @@ const (
 	goldenAnswer     = `{"fields":{"hts_10":"8207301500","qty":1200}}`
 	// sha256 of goldenAnswer, the same in Go and in Python.
 	goldenAnswerSHA256 = "7c59a2c272de44f5ce29ac4e961b00825ffa7537f33c1121e5f7c8875fdb6801"
-	goldenPrompt       = "sealed-document/1|document.extract|id=" + goldenDocumentID + "|schema=cbp_7501|key_version=1|pages=2"
+	goldenPrompt       = "sealed-document/1|document.extract|id=" + goldenDocumentID + "|schema=cbp_7501|read=text|key_version=1|pages=2"
 	goldenResponse     = "sealed-document/1|document.extract|model=" + goldenModel +
 		"|answer_sha256=" + goldenAnswerSHA256 + `|confidence={"hts_10":0.1353,"qty":0.9512}`
 )
 
 func TestCanonicalExtractLinesAreStable(t *testing.T) {
-	prompt := canonicalExtractPrompt(goldenDocumentID, "cbp_7501", 1, 2)
+	prompt := canonicalExtractPrompt(goldenDocumentID, "cbp_7501", readFromText, 1, 2)
 	if prompt != goldenPrompt {
 		t.Fatalf("prompt = %q", prompt)
 	}
