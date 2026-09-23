@@ -459,6 +459,81 @@ func TestThePromptNamesWhatALineIsMadeOf(t *testing.T) {
 	}
 }
 
+func TestALineWrittenAsAReferenceIsStillReadAsALine(t *testing.T) {
+	// This is how a caller's schema really arrives: Pydantic puts the line-item type in `$defs` and
+	// leaves a `$ref` behind. A shim that cannot follow that pointer sees an object field with no
+	// fields in it — and answers with a list of strings, which is what happened to line items.
+	schema := json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"entry_number":{"type":["string","null"]},
+			"lines":{"type":["array","null"],"description":"the grid's rows","items":{"$ref":"#/$defs/EntryLine"}}
+		},
+		"$defs":{
+			"EntryLine":{
+				"type":"object",
+				"properties":{
+					"hts_10":{"type":["string","null"],"description":"column 33 HTSUS No."},
+					"duty":{"type":["number","null"]}
+				},
+				"required":["hts_10","duty"]
+			}
+		}
+	}`)
+
+	got, err := EnvelopeSchema(schema)
+	if err != nil {
+		t.Fatalf("EnvelopeSchema: %v", err)
+	}
+	var envelope struct {
+		Properties map[string]struct {
+			Properties map[string]struct {
+				Items struct {
+					Type                 string   `json:"type"`
+					Required             []string `json:"required"`
+					AdditionalProperties bool     `json:"additionalProperties"`
+					Properties           map[string]struct {
+						Description string `json:"description"`
+						Type        []any  `json:"type"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"properties"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(got, &envelope); err != nil {
+		t.Fatalf("envelope is not json: %v", err)
+	}
+	lines, ok := envelope.Properties["fields"].Properties["lines"]
+	if !ok {
+		t.Fatalf("the lines field is missing: %s", got)
+	}
+	if lines.Items.Type != "object" {
+		t.Fatalf("lines items = %q, want the object in $defs: a $ref is not a shape", lines.Items.Type)
+	}
+	if strings.Join(lines.Items.Required, ",") != "duty,hts_10" {
+		t.Fatalf("a line requires %v, want every field the referenced type requires", lines.Items.Required)
+	}
+	if lines.Items.AdditionalProperties {
+		t.Fatal("a line must not carry fields the referenced type did not ask for")
+	}
+	// The description inside the referenced type is not part of the grammar — the prompt carries the
+	// caller's words (checked below), the grammar only says what shape an answer may have.
+	if lines.Items.Properties["hts_10"].Type == nil {
+		t.Fatalf("the line's hts_10 is missing from the grammar: %s", got)
+	}
+
+	// and the prompt names them, in the same order the grammar requires them
+	var b strings.Builder
+	writeFieldList(&b, []string{"lines"}, schemaFieldNotes(schema))
+	want := "The fields are:\n" +
+		"  - lines: the grid's rows\n" +
+		"      - duty\n" +
+		"      - hts_10: column 33 HTSUS No.\n"
+	if b.String() != want {
+		t.Fatalf("prompt =\n%s\nwant\n%s", b.String(), want)
+	}
+}
+
 func TestASchemaWithNoStructureObeyesTheSameRuleAsBefore(t *testing.T) {
 	// The wording for a plain field must not drift: the prompt is hashed into a receipt.
 	notes := map[string]schemaFieldNote{

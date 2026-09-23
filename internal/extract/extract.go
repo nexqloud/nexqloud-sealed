@@ -205,15 +205,44 @@ func schemaFields(schema json.RawMessage) ([]string, error) {
 	return fields, nil
 }
 
-// schemaProperties is the caller's own property map, which is where a field's *shape* comes from.
-func schemaProperties(schema json.RawMessage) map[string]json.RawMessage {
+// schemaDoc is the caller's schema together with the definitions it refers to.
+//
+// A caller that writes its line-item table as a type of its own (Pydantic does) hands us a property
+// that is nothing but `$ref: "#/$defs/EntryLine"`, with the fields of a line in `$defs`. A shim that
+// cannot follow that pointer sees an object-shaped field with no fields in it — which is how a
+// caller's line items came back as a list of strings: the reference, not the list, was what got
+// lost. Reading a schema means reading the parts it points at.
+type schemaDoc struct {
+	Properties map[string]json.RawMessage
+	Defs       map[string]json.RawMessage
+}
+
+func parseSchemaDoc(schema json.RawMessage) schemaDoc {
 	var parsed struct {
 		Properties map[string]json.RawMessage `json:"properties"`
+		Defs       map[string]json.RawMessage `json:"$defs"`
 	}
 	if err := json.Unmarshal(schema, &parsed); err != nil {
-		return nil
+		return schemaDoc{}
 	}
-	return parsed.Properties
+	return schemaDoc{Properties: parsed.Properties, Defs: parsed.Defs}
+}
+
+// resolve follows a local `$ref` to the definition it names. A reference that is not local, or that
+// names nothing we were given, is left alone: guessing at a schema we cannot read is worse than
+// treating the field as an opaque one. Recursion is bounded by the caller, which stops descending at
+// a fixed depth.
+func (d schemaDoc) resolve(raw json.RawMessage) json.RawMessage {
+	var ref struct {
+		Ref string `json:"$ref"`
+	}
+	if err := json.Unmarshal(raw, &ref); err != nil || !strings.HasPrefix(ref.Ref, "#/$defs/") {
+		return raw
+	}
+	if target, ok := d.Defs[strings.TrimPrefix(ref.Ref, "#/$defs/")]; ok {
+		return target
+	}
+	return raw
 }
 
 // maxEnvelopeDepth is how much structure survives into the grammar: a list of objects whose fields
@@ -231,8 +260,9 @@ const maxEnvelopeDepth = 2
 // A *shape* survives, because a shape is not formatting: a list is how many answers there are, and a
 // list of objects is which answers belong together. Flattened to a string, a model that can see
 // three tariff codes or four grid lines has no legal way to report them, and answers null.
-func envelopeProperty(raw json.RawMessage, depth int) any {
+func envelopeProperty(d schemaDoc, raw json.RawMessage, depth int) any {
 	property := map[string]any{"type": []string{"string", "null"}}
+	raw = d.resolve(raw)
 	if len(raw) == 0 {
 		return property
 	}
@@ -253,12 +283,13 @@ func envelopeProperty(raw json.RawMessage, depth int) any {
 	if !isArrayKind(parsed.Type) || depth >= maxEnvelopeDepth {
 		return property
 	}
-	return map[string]any{"type": []string{"array", "null"}, "items": envelopeItems(parsed.Items, depth+1)}
+	return map[string]any{"type": []string{"array", "null"}, "items": envelopeItems(d, parsed.Items, depth+1)}
 }
 
 // envelopeItems narrows what a list holds.
-func envelopeItems(raw json.RawMessage, depth int) any {
+func envelopeItems(d schemaDoc, raw json.RawMessage, depth int) any {
 	fallback := map[string]any{"type": []string{"string", "null"}}
+	raw = d.resolve(raw)
 	var parsed struct {
 		Type       json.RawMessage            `json:"type"`
 		Properties map[string]json.RawMessage `json:"properties"`
@@ -282,7 +313,7 @@ func envelopeItems(raw json.RawMessage, depth int) any {
 		sort.Strings(names)
 		properties := make(map[string]any, len(names))
 		for _, name := range names {
-			properties[name] = envelopeProperty(parsed.Properties[name], depth)
+			properties[name] = envelopeProperty(d, parsed.Properties[name], depth)
 		}
 		// Every field of an entry is required, so an entry cannot arrive half-written: null is
 		// how the model says a box on that line was blank.
@@ -343,15 +374,13 @@ type schemaFieldNote struct {
 // wrote about a field is the only place that list can come from, so it is carried into the
 // prompt — the descriptions the callers wrote were never reaching the model.
 func schemaFieldNotes(schema json.RawMessage) map[string]schemaFieldNote {
-	var parsed struct {
-		Properties map[string]json.RawMessage `json:"properties"`
-	}
-	if err := json.Unmarshal(schema, &parsed); err != nil {
+	doc := parseSchemaDoc(schema)
+	if len(doc.Properties) == 0 {
 		return nil
 	}
-	notes := make(map[string]schemaFieldNote, len(parsed.Properties))
-	for name, raw := range parsed.Properties {
-		note := schemaFieldNoteFromProperty(raw)
+	notes := make(map[string]schemaFieldNote, len(doc.Properties))
+	for name, raw := range doc.Properties {
+		note := schemaFieldNoteFromProperty(doc, raw)
 		if note.Description == "" && len(note.Enum) == 0 && len(note.Items) == 0 {
 			continue
 		}
@@ -361,14 +390,16 @@ func schemaFieldNotes(schema json.RawMessage) map[string]schemaFieldNote {
 }
 
 // schemaFieldNoteFromProperty reads one property: its description, its closed set of values, and —
-// for a list of objects — the fields of each entry, which the prompt has to spell out.
-func schemaFieldNoteFromProperty(raw json.RawMessage) schemaFieldNote {
+// for a list of objects — the fields of each entry, which the prompt has to spell out. A property
+// written as a reference to a type of its own is followed, so a line's fields are named whether the
+// caller wrote them inline or in `$defs`.
+func schemaFieldNoteFromProperty(d schemaDoc, raw json.RawMessage) schemaFieldNote {
 	var property struct {
 		Description string          `json:"description"`
 		Enum        []any           `json:"enum"`
 		Items       json.RawMessage `json:"items"`
 	}
-	if err := json.Unmarshal(raw, &property); err != nil {
+	if err := json.Unmarshal(d.resolve(raw), &property); err != nil {
 		return schemaFieldNote{}
 	}
 	note := schemaFieldNote{
@@ -378,7 +409,7 @@ func schemaFieldNoteFromProperty(raw json.RawMessage) schemaFieldNote {
 	var items struct {
 		Properties map[string]json.RawMessage `json:"properties"`
 	}
-	if err := json.Unmarshal(property.Items, &items); err != nil || len(items.Properties) == 0 {
+	if err := json.Unmarshal(d.resolve(property.Items), &items); err != nil || len(items.Properties) == 0 {
 		return note
 	}
 	names := make([]string, 0, len(items.Properties))
@@ -387,7 +418,7 @@ func schemaFieldNoteFromProperty(raw json.RawMessage) schemaFieldNote {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		sub := schemaFieldNoteFromProperty(items.Properties[name])
+		sub := schemaFieldNoteFromProperty(d, items.Properties[name])
 		sub.Name = name
 		note.Items = append(note.Items, sub)
 	}
@@ -427,11 +458,11 @@ func EnvelopeSchema(schema json.RawMessage) (json.RawMessage, error) {
 	}
 	notes := schemaFieldNotes(schema)
 	properties := make(map[string]any, len(fields))
-	caller := schemaProperties(schema)
+	caller := parseSchemaDoc(schema)
 	for _, field := range fields {
 		// The caller's own shape decides what a field may hold — see envelopeProperty for why a
 		// scalar is narrowed to a string and a list is kept a list.
-		property := envelopeProperty(caller[field], 0).(map[string]any)
+		property := envelopeProperty(caller, caller.Properties[field], 0).(map[string]any)
 		// A caller's closed set of values is the one constraint that survives: it cannot
 		// coerce what a page prints — which is exactly why patterns and number types are
 		// dropped above — and it is what makes a *choice* (this document is one of these
