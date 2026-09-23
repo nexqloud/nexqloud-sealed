@@ -375,15 +375,13 @@ func (s *server) handleDocumentReadKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resealed := make([][]byte, 0, len(pages))
-	for i, page := range pages {
-		blob, err := readkey.SealPage(grant.Key, page)
-		if err != nil {
-			log.Printf("document read-key: seal page %d: %v", i+1, err)
-			http.Error(w, "cannot prepare the pages for the recipient", http.StatusInternalServerError)
-			return
-		}
-		resealed = append(resealed, blob)
+	// Everything the recipient receives is sealed here, pages and pieces alike: a piece is part of a
+	// page render, so sealing the pages and handing over the pieces in the clear would defeat it.
+	resealed, sealedPieces, err := sealForRecipient(grant.Key, pages, pieceParts)
+	if err != nil {
+		log.Printf("document read-key: %v", err)
+		http.Error(w, "cannot prepare the pages for the recipient", http.StatusInternalServerError)
+		return
 	}
 
 	// The grant travels as the container's first part: public by construction, and
@@ -407,7 +405,7 @@ func (s *server) handleDocumentReadKey(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", docwire.ContentType)
 	w.WriteHeader(http.StatusOK)
-	if err := docwire.EncodeExtras(w, out, grantJSON, resealed, pieceParts); err != nil {
+	if err := docwire.EncodeExtras(w, out, grantJSON, resealed, sealedPieces); err != nil {
 		// The status line is already out; the caller sees a truncated container and
 		// docwire refuses it, which is the honest outcome here.
 		log.Printf("document read-key: encode: %v", err)

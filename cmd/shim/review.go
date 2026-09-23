@@ -8,9 +8,36 @@ import (
 	"strings"
 
 	"nexqloud-sealed/internal/documents"
+	"nexqloud-sealed/internal/readkey"
 	"nexqloud-sealed/internal/redact"
 	"nexqloud-sealed/pkg/docwire"
 )
+
+// sealForRecipient seals every part that is going to a recipient under the session key.
+//
+// It exists because of a bug: the pages were sealed and the pieces were not, so a redacted document
+// travelled with legible regions of it in the clear beside the pages. Nothing leaves the enclave
+// unsealed, and this is the one door out, so a new kind of part cannot miss it by being appended
+// somewhere else.
+func sealForRecipient(sessionKey []byte, pages [][]byte, pieces []docwire.Named) ([][]byte, []docwire.Named, error) {
+	sealedPages := make([][]byte, 0, len(pages))
+	for index, page := range pages {
+		blob, err := readkey.SealPage(sessionKey, page)
+		if err != nil {
+			return nil, nil, fmt.Errorf("seal page %d: %w", index+1, err)
+		}
+		sealedPages = append(sealedPages, blob)
+	}
+	sealedPieces := make([]docwire.Named, 0, len(pieces))
+	for _, piece := range pieces {
+		blob, err := readkey.SealPage(sessionKey, piece.Bytes)
+		if err != nil {
+			return nil, nil, fmt.Errorf("seal piece %q: %w", piece.Name, err)
+		}
+		sealedPieces = append(sealedPieces, docwire.Named{Name: piece.Name, Bytes: blob})
+	}
+	return sealedPages, sealedPieces, nil
+}
 
 // pageModeRedacted is the only page a reviewer is ever handed: the regions under review, with a black
 // rectangle over everything else. Nothing in this package returns a whole page, and there is no mode
