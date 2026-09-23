@@ -197,6 +197,78 @@ func schemaFields(schema json.RawMessage) ([]string, error) {
 	return fields, nil
 }
 
+// fieldShape is what the caller asked a field to be: one value, or a list of them.
+type fieldShape struct {
+	kind  string
+	items any
+}
+
+const (
+	shapeValue = "value"
+	shapeList  = "list"
+)
+
+// schemaFieldShapes reads the *shape* of each field out of the caller's schema.
+//
+// Everything else about a field can be relaxed — a page prints what it prints, and a model that
+// cannot coerce it should say so — but a list is not a preference about formatting: it is how many
+// answers there are. A grammar that allows only a string leaves a model that can see three tariff
+// codes no legal way to report them.
+func schemaFieldShapes(schema json.RawMessage) map[string]fieldShape {
+	var parsed struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(schema, &parsed); err != nil {
+		return nil
+	}
+	shapes := make(map[string]fieldShape, len(parsed.Properties))
+	for name, raw := range parsed.Properties {
+		shapes[name] = schemaFieldShape(raw)
+	}
+	return shapes
+}
+
+func schemaFieldShape(raw json.RawMessage) fieldShape {
+	var prop struct {
+		Type  json.RawMessage `json:"type"`
+		Items json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &prop); err != nil {
+		return fieldShape{kind: shapeValue}
+	}
+	var single string
+	if err := json.Unmarshal(prop.Type, &single); err == nil {
+		if single == "array" {
+			return fieldShape{kind: shapeList, items: itemSchema(prop.Items)}
+		}
+		return fieldShape{kind: shapeValue}
+	}
+	var kinds []string
+	if err := json.Unmarshal(prop.Type, &kinds); err == nil {
+		for _, kind := range kinds {
+			if kind == "array" {
+				return fieldShape{kind: shapeList, items: itemSchema(prop.Items)}
+			}
+		}
+	}
+	return fieldShape{kind: shapeValue}
+}
+
+// itemSchema keeps the caller's item type when it is simple enough to be a grammar, and falls back
+// to a string, which is what every list in this caller's schemas holds.
+func itemSchema(raw json.RawMessage) any {
+	var items struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &items); err == nil {
+		switch items.Type {
+		case "string", "number", "integer", "boolean":
+			return map[string]any{"type": items.Type}
+		}
+	}
+	return map[string]any{"type": "string"}
+}
+
 // Fields exposes a schema's field names, so a caller can ask for a confidence for
 // each of them.
 func Fields(schema json.RawMessage) ([]string, error) { return schemaFields(schema) }
@@ -273,8 +345,16 @@ func EnvelopeSchema(schema json.RawMessage) (json.RawMessage, error) {
 	}
 	notes := schemaFieldNotes(schema)
 	properties := make(map[string]any, len(fields))
+	shapes := schemaFieldShapes(schema)
 	for _, field := range fields {
 		value := map[string]any{"type": []string{"string", "null"}}
+		// A field the caller asked for as a *list* stays a list. Narrowing it to a string
+		// would leave "answer with a list" illegal in the grammar, so a model that can see
+		// three tariff codes would have no legal way to say so and would answer null — a
+		// field reported as "not read" while the code is plainly printed on the page.
+		if shape, ok := shapes[field]; ok && shape.kind == shapeList {
+			value = map[string]any{"type": []string{"array", "null"}, "items": shape.items}
+		}
 		// A caller's closed set of values is the one constraint that survives: it cannot
 		// coerce what a page prints — which is exactly why patterns and number types are
 		// dropped above — and it is what makes a *choice* (this document is one of these

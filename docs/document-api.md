@@ -229,7 +229,13 @@ unchanged. Outside dev mode a missing report is still a hard error.
    (`internal/render/bands.go`, which carries the measurement), because a vision encoder resizes any
    image to a fixed budget of about 4,051 tokens: one image whatever its size is ~1,000 page pixels
    per token, so a page sent whole loses its small print to the downscale, while each strip gets its
-   own budget at the resolution it was drawn at. A read whose strips do not fit the deployment's
+   own budget at the resolution it was drawn at. **Measured afterwards, the strips do not buy
+   resolution:** a scanned 7501 read as four 400 DPI strips cost 15,691 prompt tokens (llama-server:
+   `prompt processing, n_tokens = 12917, progress = 0.77`), about 1,017 page pixels per token — the
+   same ratio a whole 200 DPI page already had, since that page was *under* the per-image budget and
+   was never downscaled. The binding limit is the per-image budget (~4,051 tokens, ~4 Mpx), so the
+   grid's eight-point print is still under a token: reading it needs a raised per-image token budget
+   on the server, or the region given its own picture. A read whose strips do not fit the deployment's
    context is refused `422` naming the estimated tokens and the budget, rather than handed to the
    engine to fail at. The receipt still counts *pages*, not strips. Open: nobody has measured a
    picture read's accuracy against a hand-checked set yet, and the 8-page bound is a guess at the

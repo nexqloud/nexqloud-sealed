@@ -335,6 +335,49 @@ func TestEnvelopeSchemaConstrainsTheShapeNotTheValues(t *testing.T) {
 	}
 }
 
+func TestEnvelopeSchemaKeepsAListFieldAList(t *testing.T) {
+	// A caller asking for a list of codes has to get a grammar that allows a list: a model that
+	// can see three tariff codes and is only allowed a string has no legal way to report them,
+	// so it answers null and the field reads as "not read" with the code plainly on the page.
+	schema := json.RawMessage(`{"type":"object","properties":{` +
+		`"chapter99_lines":{"type":["array","null"],"items":{"type":"string"}},` +
+		`"entry_number":{"type":["string","null"]}}}`)
+
+	got, err := EnvelopeSchema(schema)
+	if err != nil {
+		t.Fatalf("EnvelopeSchema: %v", err)
+	}
+
+	var envelope struct {
+		Properties map[string]struct {
+			Properties map[string]struct {
+				Type  []string        `json:"type"`
+				Items json.RawMessage `json:"items"`
+			} `json:"properties"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(got, &envelope); err != nil {
+		t.Fatalf("envelope is not json: %v", err)
+	}
+	fields := envelope.Properties["fields"].Properties
+	list, ok := fields["chapter99_lines"]
+	if !ok {
+		t.Fatalf("the list field is missing: %s", got)
+	}
+	if strings.Join(list.Type, "|") != "array|null" {
+		t.Fatalf("chapter99_lines type = %v, want array|null", list.Type)
+	}
+	var items struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(list.Items, &items); err != nil || items.Type != "string" {
+		t.Fatalf("chapter99_lines items = %s, want a string item", list.Items)
+	}
+	if strings.Join(fields["entry_number"].Type, "|") != "string|null" {
+		t.Fatalf("entry_number type = %v, want a single value narrowed as before", fields["entry_number"].Type)
+	}
+}
+
 func TestEnvelopeSchemaRefusesAnUnusableSchema(t *testing.T) {
 	_, err := EnvelopeSchema(json.RawMessage(`{"type":"object"}`))
 	if !errors.Is(err, ErrUnusableSchema) {

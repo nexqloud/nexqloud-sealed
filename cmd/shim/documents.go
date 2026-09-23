@@ -833,12 +833,19 @@ const maxPageImageRead = 8
 // cannot be read at all — which is why a scan read returned the large header fields and null for
 // every grid field, while the same form's text layer read them at 0.99 confidence.
 //
-// The budget is *per image*, so the fix is not a finer render of the same picture but several
-// pictures: the page is drawn at readDPI and cut into strips, each inside the budget, so every
-// strip gets its own 4,000 tokens at the resolution it was drawn at (render.SplitBands, which
-// carries the measurements). At 400 DPI a letter page is about 15 Mpx, i.e. four or five strips and
-// about 15,000 prompt tokens — roughly four times the effective resolution of one 200 DPI page, for
-// about four times the context.
+// The budget is *per image*, so a page finer than the budget has to arrive as several pictures
+// rather than one: the page is drawn at readDPI and cut into strips (render.SplitBands, which
+// carries the measurements), so each strip is inside the budget instead of the whole page being
+// resized down to it.
+//
+// What the strips do **not** do, measured on a real scanned 7501 on 2026-09-23: they do not buy
+// resolution. Four strips at 400 DPI came back at 3,931 tokens each (llama-server's own
+// `prompt processing, n_tokens = 12917, progress = 0.77`), i.e. about 1,017 page pixels per token —
+// exactly the ratio a whole 200 DPI page already had, because that page (3.7 Mpx) was *under* the
+// ~4 Mpx budget and was never downscaled. Strips only avoid the loss a *finer whole page* suffers.
+// The binding limit is the encoder's per-image budget, so reading eight-point print needs either a
+// raised per-image token budget on the server or the region given its own picture — not a finer
+// render of the same page.
 //
 // SEALED_READ_DPI overrides the render, SEALED_READ_PAGE_LIMIT the page bound, and
 // SEALED_READ_TOKEN_BUDGET the context a read may spend. The page bound belongs with the engine's
