@@ -1,0 +1,123 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
+	"math"
+	"strings"
+	"testing"
+
+	"nexqloud-sealed/internal/chat"
+	"nexqloud-sealed/internal/inference"
+	"nexqloud-sealed/internal/redact"
+)
+
+// fakeEngine answers as the real engine is asked to: with a region per field.
+type fakeEngine struct {
+	answer string
+	seen   inference.Request
+}
+
+func (f *fakeEngine) Complete(req inference.Request) (inference.Response, error) {
+	f.seen = req
+	return inference.Response{Content: f.answer, Model: "fake"}, nil
+}
+func (f *fakeEngine) CompleteStream(inference.Request, inference.TokenHandler) (inference.Response, error) {
+	return inference.Response{}, nil
+}
+
+func pagePNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.Draw(img, img.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
+	draw.Draw(img, image.Rect(0, height/4, width, height/4+20), image.NewUniform(color.RGBA{200, 200, 200, 255}), image.Point{}, draw.Src)
+	var out bytes.Buffer
+	if err := png.Encode(&out, img); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	return out.Bytes()
+}
+
+// The whole point: a page with no words gets its regions from the engine that read it, and those
+// regions land on the page in the page's own coordinates.
+func TestAScanGetsItsRegionsFromTheEngine(t *testing.T) {
+	engine := &fakeEngine{answer: `{"importer_of_record": {"page": 1, "box": [0.1, 0.2, 0.3, 0.05]},
+		"lines.1.qty": {"page": 1, "box": [0.4, 0.5, 0.1, 0.04]}}`}
+	server := &server{engine: &chat.Engine{Inference: engine}}
+
+	pages := [][]byte{pagePNG(t, 1224, 1584)}
+	dims := []redact.Page{{Number: 1, Width: 612, Height: 792}}
+
+	found := server.boxesFromModel(context.Background(), map[string]any{
+		"importer_of_record": "VANTAGE TOOL WORKS",
+		"lines.1.qty":        1800.0,
+	}, pages, dims, "qwen", "tenant", "nonce")
+
+	if len(found) != 2 {
+		t.Fatalf("both values were placed by the engine, got %d: %+v", len(found), found)
+	}
+	importer := found["importer_of_record"]
+	if math.Abs(importer.Left-61.2) > 0.01 || math.Abs(importer.Top-158.4) > 0.01 {
+		t.Fatalf("the region has to be in the page's own points, got %+v", importer)
+	}
+	if importer.Page != 1 {
+		t.Fatalf("the region has to say which page, got %+v", importer)
+	}
+	// And the image really was shown to the engine: a scan is located from a picture, not a guess.
+	if len(engine.seen.Images) != 1 {
+		t.Fatalf("the page has to be sent as an image, got %d", len(engine.seen.Images))
+	}
+	if !strings.Contains(engine.seen.Prompt, "importer_of_record = VANTAGE TOOL WORKS") {
+		t.Fatalf("the prompt has to name the values it is asking about, got:\n%s", engine.seen.Prompt)
+	}
+	if !engine.seen.DisableThinking {
+		t.Fatal("locating a value is a question, not a deliberation")
+	}
+}
+
+func TestARegionOffThePageIsRefusedRatherThanPainted(t *testing.T) {
+	engine := &fakeEngine{answer: `{"qty": {"page": 7, "box": [0.1, 0.1, 0.1, 0.1]},
+		"hts_10": {"page": 1, "box": [0, 0, 0, 0]}}`}
+	server := &server{engine: &chat.Engine{Inference: engine}}
+
+	found := server.boxesFromModel(context.Background(), map[string]any{"qty": 1, "hts_10": "7318"},
+		[][]byte{pagePNG(t, 1224, 1584)}, []redact.Page{{Number: 1, Width: 612, Height: 792}}, "qwen", "", "")
+
+	if _, ok := found["qty"]; ok {
+		t.Fatal("a page number that is not in the document must not become a region")
+	}
+	if _, ok := found["hts_10"]; ok {
+		t.Fatal("an empty region must not become a region")
+	}
+}
+
+func TestAnAnswerThatIsNotJSONPlacesNothing(t *testing.T) {
+	engine := &fakeEngine{answer: "I could not read this document, sorry."}
+	server := &server{engine: &chat.Engine{Inference: engine}}
+	if found := server.boxesFromModel(context.Background(), map[string]any{"qty": 1},
+		[][]byte{pagePNG(t, 1224, 1584)}, []redact.Page{{Number: 1, Width: 612, Height: 792}}, "qwen", "", ""); len(found) != 0 {
+		t.Fatalf("an unusable answer places nothing, got %+v", found)
+	}
+}
+
+func TestAnAnswerWrappedInProseIsStillRead(t *testing.T) {
+	placements, err := parsePlacements("Here you go:\n```json\n{\"qty\": {\"page\": 1, \"box\": [0.4, 0.5, 0.1, 0.04]}}\n```\n")
+	if err != nil {
+		t.Fatalf("a fenced answer is still an answer: %v", err)
+	}
+	if placements["qty"].Page != 1 {
+		t.Fatalf("want the placement read back, got %+v", placements)
+	}
+}
+
+func TestNoEngineMeansNoRegion(t *testing.T) {
+	server := &server{}
+	if found := server.boxesFromModel(context.Background(), map[string]any{"qty": 1},
+		[][]byte{pagePNG(t, 1224, 1584)}, []redact.Page{{Number: 1, Width: 612, Height: 792}}, "qwen", "", ""); found != nil {
+		t.Fatalf("without an engine nothing can be located, got %+v", found)
+	}
+}

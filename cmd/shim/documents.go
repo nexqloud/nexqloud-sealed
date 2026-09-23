@@ -219,6 +219,10 @@ type readKeyRequest struct {
 	// Fields is what the person at that browser is reviewing, with each value as the application
 	// stored it. The enclave locates them and shows nothing else.
 	Fields map[string]any `json:"fields,omitempty"`
+	// Model names the engine to ask when a page has no text layer to find a value in. A scan gets its
+	// regions from the same model that read it, because nothing else can see where a value is printed
+	// on a picture. Unstated means the deployment's own default.
+	Model string `json:"model,omitempty"`
 }
 
 // handleDocumentReadKey issues a short-lived key that opens one document's page
@@ -353,7 +357,10 @@ func (s *server) handleDocumentReadKey(w http.ResponseWriter, r *http.Request) {
 	var pieceParts []docwire.Named
 	redacted := false
 	if req.Page == pageModeRedacted && len(req.Fields) > 0 {
-		painted, pieces, located, rerr := s.redactForReview(r.Context(), dek, keyVersion, sealedSource, pages, req.Fields)
+		painted, pieces, located, rerr := s.redactForReview(r.Context(), dek, keyVersion, sealedSource, pages, req.Fields,
+			func(ctx context.Context, fields map[string]any, drawn [][]byte, dims []redact.Page) map[string]redact.Box {
+				return s.boxesFromModel(ctx, fields, drawn, dims, req.Model, id.TenantID, req.ChallengeNonce)
+			})
 		switch {
 		case errors.Is(rerr, redact.ErrNoText), errors.Is(rerr, redact.ErrNoRegion):
 			log.Printf("document read-key: nothing of this document can be shown: %v", rerr)

@@ -309,6 +309,46 @@ func union(page Page, words []int) (Box, bool) {
 	return box, true
 }
 
+// Textless reports a document whose pages carry no words at all — a scan.
+//
+// Such a page has no source of a location here, and asking for one from the text layer would find
+// nothing; the caller has to get the boxes from what the model saw instead, and this is how it knows
+// to ask rather than sending a page it cannot redact.
+func Textless(pages []Page) bool {
+	if len(pages) == 0 {
+		return false
+	}
+	for _, page := range pages {
+		if len(page.Words) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// NormalisedBox puts a box a model gave for a page it was shown into the page's own points.
+//
+// A model answers about the picture it was given, so its numbers are fractions of that picture's
+// width and height from its top left — the same corner poppler measures from, so nothing is flipped
+// here. The page's own size comes from the document, not from the image, because the two need not be
+// drawn at the same scale.
+func NormalisedBox(page int, x, y, width, height, pageWidth, pageHeight float64) Box {
+	clamp := func(value, limit float64) float64 {
+		if value < 0 {
+			return 0
+		}
+		if value > limit {
+			return limit
+		}
+		return value
+	}
+	left := clamp(x, 1.0) * pageWidth
+	top := clamp(y, 1.0) * pageHeight
+	right := clamp(x+width, 1.0) * pageWidth
+	bottom := clamp(y+height, 1.0) * pageHeight
+	return Box{Page: page, Left: left, Top: top, Right: right, Bottom: bottom}
+}
+
 // Split asks the document what it says and where. This is the only step that leaves the process.
 func Split(ctx context.Context, source []byte) ([]Page, error) {
 	dir, err := os.MkdirTemp("", "redact-")

@@ -54,7 +54,7 @@ const pageModeRedacted = "redacted"
 // Two failures are normal and are handed back as they are, because the caller has to be able to say
 // why nothing was shown rather than showing something unredacted: a document with no text to find a
 // value in (a scan), and a document where not one value under review could be located.
-func (s *server) redactForReview(ctx context.Context, dek []byte, keyVersion int, sealedSource []byte, pages [][]byte, fields map[string]any) (out [][]byte, pieces []docwire.Named, located int, err error) {
+func (s *server) redactForReview(ctx context.Context, dek []byte, keyVersion int, sealedSource []byte, pages [][]byte, fields map[string]any, locateScan func(context.Context, map[string]any, [][]byte, []redact.Page) map[string]redact.Box) (out [][]byte, pieces []docwire.Named, located int, err error) {
 	kind, source, err := documents.Open(dek, sealedSource, keyVersion)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("open source: %w", err)
@@ -72,6 +72,20 @@ func (s *server) redactForReview(ctx context.Context, dek []byte, keyVersion int
 	}
 
 	found, missing := redact.Locate(text, fields)
+
+	// A document whose pages carry no words at all is a picture, and nothing here can see where a
+	// value is printed in one. The engine that read it can: it was shown those same pages. This is
+	// the only way a scan gets a region, and a field the engine will not place stays missing.
+	if redact.Textless(text) && locateScan != nil {
+		ask := make(map[string]any, len(missing))
+		for field := range missing {
+			ask[field] = fields[field]
+		}
+		for field, box := range locateScan(ctx, ask, pages, text) {
+			found[field] = box
+		}
+	}
+
 	if len(found) == 0 {
 		return nil, nil, 0, fmt.Errorf("%w (%s)", redact.ErrNoRegion, joinFields(missing))
 	}

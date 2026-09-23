@@ -117,7 +117,7 @@ arrive with no relationship to each other.
 
 ```
 in   { document_id, purpose, ttl_seconds, recipient_public_key, source_url, challenge_nonce?,
-       page?, fields? }
+       page?, fields?, model? }
 out  a sealed-document container:
        part "source"    the grant — the session key wrapped to the recipient, with its expiry
        parts "page-*"   the page renders, re-sealed under that session key
@@ -157,11 +157,28 @@ when the pages were painted out, a reader must refuse a page part that is not de
 covers the pages actually returned, so an unredacted render of a secret document never leaves the
 enclave.
 
+**Omit `page` and you get the pages as they are.** That is not a fallback, it is a mode: a caller that
+has not asked for a redaction has nothing to have withheld, `header.redacted` stays unset, and the
+pages are still sealed to the recipient and still expire. A deployment that wants the old behaviour —
+every part of every page, nothing located — has only to stop asking for `page: "redacted"`, which is
+exactly what the review screen's own switch does.
+
+**A page with no text layer is located by the engine that read it.** A scan carries no words for the
+locator to find, so when every page of a document is wordless and `model` names an engine, this side
+sends those page renders back to that engine and asks where each value in `fields` is printed,
+constrained to a small JSON shape (`cmd/shim/boxes.go`; `redact.NormalisedBox` puts the answer in the
+page's own points, clamped to its edges). A region a model gives is approximate, so it is treated as
+approximate: it is grown before anything is painted, and a value the engine will not place is left
+unlocated rather than guessed at. That is also why the answer is asked for in the same shape whether
+the page is a picture or not — the caller does not have to know which kind of document it holds. The
+engine call costs one picture of each page, so a scan's grant takes seconds longer to issue than a
+digital document's; nothing about it is stored, so nothing about it goes stale.
+
 Two outcomes are normal and are reported rather than worked around. A document whose values cannot be
-located at all — a **scan** has no text to look in — comes back with **no page parts** and a receipt
-covering zero pages: it is not shown unredacted instead. And a value the form does not print as stored
-(a checkbox, a line number, a number under four digits) is simply not located, which is recorded and
-the page is redacted to the rest.
+located at all — a **scan** with no engine named, or one whose pages the engine will not place —
+comes back with **no page parts** and a receipt covering zero pages: it is not shown unredacted
+instead. And a value the form does not print as stored (a checkbox, a line number, a number under
+four digits) is simply not located, which is recorded and the page is redacted to the rest.
 
 #### What a grant is worth, honestly
 

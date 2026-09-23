@@ -177,6 +177,38 @@ const (
 	otherPixelX, otherPixelY = 200, 810
 )
 
+func TestNormalisedBoxPutsAModelsFractionsOnThePage(t *testing.T) {
+	box := NormalisedBox(2, 0.25, 0.5, 0.1, 0.05, 612, 792)
+	if box.Page != 2 {
+		t.Fatalf("the box has to keep its page, got %d", box.Page)
+	}
+	if math.Abs(box.Left-153) > 0.01 || math.Abs(box.Top-396) > 0.01 {
+		t.Fatalf("top left is wrong: %+v", box)
+	}
+	if math.Abs(box.Right-214.2) > 0.01 || math.Abs(box.Bottom-435.6) > 0.01 {
+		t.Fatalf("bottom right is wrong: %+v", box)
+	}
+	// A model that overshoots must not produce a box off the page.
+	wide := NormalisedBox(1, 0.9, 0.9, 0.5, 0.5, 612, 792)
+	if wide.Right != 612 || wide.Bottom != 792 {
+		t.Fatalf("a box has to be clamped to the page, got %+v", wide)
+	}
+}
+
+func TestTextlessTellsAScanFromAPageThatSaysSomething(t *testing.T) {
+	scan := []Page{{Number: 1, Width: 612, Height: 792}}
+	if !Textless(scan) {
+		t.Fatal("a page with no words is a scan")
+	}
+	if Textless([]Page{}) {
+		t.Fatal("no pages is not a scan, it is nothing to read")
+	}
+	spoken := []Page{{Number: 1, Width: 612, Height: 792, Words: []Word{{Text: "VANTAGE"}}}}
+	if Textless(spoken) {
+		t.Fatal("a page with words is read from its text layer")
+	}
+}
+
 func TestBlackKeepsTheRegionsItWasGivenAndPaintsOutTheRest(t *testing.T) {
 	blob, err := Black(syntheticReviewPage(t), testPageWidthPt, []Box{testKeep})
 	if err != nil {
