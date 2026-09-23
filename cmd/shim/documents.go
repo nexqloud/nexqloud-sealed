@@ -9,7 +9,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -650,6 +652,8 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 		}
 		for i, page := range rendered {
 			digest := docwire.Digest(page)
+			log.Printf("[sealed] read:   page %d/%d → image %s (%d KiB)",
+				i+1, len(rendered), digest[:12], len(page)>>10)
 			imagePages = append(imagePages, extract.PageImage{
 				Number:   i + 1,
 				SHA256:   digest,
@@ -658,7 +662,12 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 			})
 			images = append(images, inference.Image{MIMEType: "image/png", Data: page})
 		}
+		log.Printf("[sealed] read: %s has no text layer — the read is made from %d page image(s) at %d DPI, not from text",
+			documentID, len(rendered), readDPIFromEnv())
 		readFrom = readFromPageImages
+	} else {
+		log.Printf("[sealed] read: %s read from its text layer (%d characters)",
+			documentID, len(text))
 	}
 
 	var prompt string
@@ -688,6 +697,8 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no inference backend configured", http.StatusServiceUnavailable)
 		return
 	}
+	log.Printf("[sealed] read: asking the engine read=%s images=%d prompt=%d chars model=%s",
+		readFrom, len(images), len(prompt), strings.TrimSpace(req.Model))
 	completion, err := s.engine.Inference.Complete(inference.Request{
 		Model:          strings.TrimSpace(req.Model),
 		Prompt:         prompt,
@@ -776,6 +787,51 @@ const (
 // with nothing saying so, is worse than an honest refusal.
 const maxPageImageRead = 8
 
+// readDPI is how finely a page is drawn for a picture read.
+//
+// Rendering finer than about 200 DPI buys nothing: the vision encoder resizes whatever it is given
+// to a fixed token budget, so extra pixels are thrown away before the model ever sees them.
+// Measured on this deployment against the served model —
+//
+//	200 DPI  1700x2200 ( 3.7 Mpx)  ->  3676 prompt tokens
+//	400 DPI  3400x4400 (15.0 Mpx)  ->  4051 prompt tokens
+//	600 DPI  5100x6600 (33.7 Mpx)  ->  4051 prompt tokens   (the cap)
+//
+// — i.e. one image is capped near 4,000 tokens (~3.2 Mpx), and a page rendered at 400 DPI is
+// therefore *downscaled* to that budget, which is slightly worse than 200 DPI rather than better.
+//
+// What that means for reading small print: a whole 200 DPI letter page spends about 1,000 pixels
+// per token, so an eight-point figure in a 7501's line grid (about 22 px tall) falls inside a
+// single token and cannot be read at all — which is why a scan read returned the large header
+// fields and null for every grid field, while the same form's text layer read them at 0.99
+// confidence. Raising the DPI cannot fix that. Giving the *region* its own image can: the same
+// 4,000-token budget spent on the grid instead of the whole page resolves about four times finer.
+// That is a change of what is attached, not of how it is rendered.
+//
+// SEALED_READ_DPI overrides the render; SEALED_READ_PAGE_LIMIT overrides the page bound. The page
+// bound belongs with the engine's context: one page costs about 3,700 prompt tokens at 200 DPI.
+const readDPI = 200
+
+// readDPIFromEnv is the render resolution a picture read uses.
+func readDPIFromEnv() int {
+	if value := strings.TrimSpace(os.Getenv("SEALED_READ_DPI")); value != "" {
+		if dpi, err := strconv.Atoi(value); err == nil && dpi > 0 {
+			return dpi
+		}
+	}
+	return readDPI
+}
+
+// readPageLimitFromEnv is how many pages one picture read covers.
+func readPageLimitFromEnv() int {
+	if value := strings.TrimSpace(os.Getenv("SEALED_READ_PAGE_LIMIT")); value != "" {
+		if limit, err := strconv.Atoi(value); err == nil && limit > 0 {
+			return limit
+		}
+	}
+	return maxPageImageRead
+}
+
 // errTooManyPages means the document has more pages than a picture read covers. The body says so,
 // with both numbers, so a caller can act on it instead of guessing at a rendering failure.
 var errTooManyPages = errors.New("too many pages to read as pictures")
@@ -786,16 +842,18 @@ func (s *server) pageImages(ctx context.Context, pdf []byte) ([][]byte, error) {
 	if renderer == nil {
 		renderer = &render.Exec{}
 	}
+	limit := readPageLimitFromEnv()
 	opts := render.DefaultOptions()
+	opts.DPI = readDPIFromEnv()
 	// One more than the bound, so "too long" can be told apart from "exactly at the bound".
-	opts.MaxPages = maxPageImageRead + 1
+	opts.MaxPages = limit + 1
 	pages, err := renderer.Pages(ctx, pdf, opts)
 	if err != nil {
 		return nil, err
 	}
-	if len(pages) > maxPageImageRead {
+	if len(pages) > limit {
 		return nil, fmt.Errorf("%w: %d pages, this deployment reads up to %d as pictures",
-			errTooManyPages, len(pages), maxPageImageRead)
+			errTooManyPages, len(pages), limit)
 	}
 	return pages, nil
 }
