@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -699,6 +702,78 @@ const (
 	goldenResponse     = "sealed-document/1|document.extract|model=" + goldenModel +
 		"|answer_sha256=" + goldenAnswerSHA256 + `|confidence={"hts_10":0.1353,"qty":0.9512}`
 )
+
+// realPNGPage draws a page the banding can actually cut up. The fake page bytes the other tests use
+// are not decodable images, which is why they are attached whole — a page that cannot be cut is
+// still read, so banding can never turn a readable document into a refusal.
+func realPNGPage(t *testing.T, width, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x % 256), G: uint8(y % 256), B: uint8((x + y) % 256), A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode page: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestHandleDocumentExtractReadsALargeScanInStrips(t *testing.T) {
+	// One image gets about 4,000 tokens, so a page sent whole is downscaled and its small print is
+	// lost with it. The page is cut into strips instead, each keeping its own resolution — and the
+	// receipt still counts *pages*, because the caller asked about a document, not about strips.
+	t.Setenv("SEALED_READ_BAND_PIXELS", "40000")
+	srv, fixture, _, model := extractServer(t)
+	srv.text = &textStub{err: render.ErrNoText}
+	srv.renderer = &pageStub{pages: [][]byte{realPNGPage(t, 200, 600)}}
+
+	rec := httptest.NewRecorder()
+	srv.handleDocumentExtract(rec, extractRequestWith(extractBody(fixture)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var out extractResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("response is not json: %v", err)
+	}
+	if len(model.req.Images) < 2 {
+		t.Fatalf("the model got %d image(s), want the page cut into strips", len(model.req.Images))
+	}
+	if out.Pages != 1 {
+		t.Fatalf("pages = %d, want 1: the receipt counts pages, not strips", out.Pages)
+	}
+	if !strings.Contains(model.req.Prompt, "strip 1 of ") {
+		t.Fatalf("the prompt does not describe the strips:\n%s", model.req.Prompt)
+	}
+	if !strings.HasSuffix(out.ReceiptPrompt, "|pages=1") {
+		t.Fatalf("receipt prompt %q does not count the document's one page", out.ReceiptPrompt)
+	}
+}
+
+func TestHandleDocumentExtractRefusesStripsThatDoNotFitTheContext(t *testing.T) {
+	// A read whose pictures do not fit is refused with both numbers rather than handed to the
+	// engine, which would fail at it or drop tokens and leave the caller guessing.
+	t.Setenv("SEALED_READ_BAND_PIXELS", "40000")
+	t.Setenv("SEALED_READ_TOKEN_BUDGET", "50")
+	srv, fixture, _, model := extractServer(t)
+	srv.text = &textStub{err: render.ErrNoText}
+	srv.renderer = &pageStub{pages: [][]byte{realPNGPage(t, 200, 600)}}
+
+	rec := httptest.NewRecorder()
+	srv.handleDocumentExtract(rec, extractRequestWith(extractBody(fixture)))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d, want 422: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "tokens") {
+		t.Fatalf("the refusal does not say what did not fit: %s", rec.Body.String())
+	}
+	if len(model.req.Images) != 0 {
+		t.Fatal("the model was asked to read pictures that do not fit")
+	}
+}
 
 func TestCanonicalExtractLinesAreStable(t *testing.T) {
 	prompt := canonicalExtractPrompt(goldenDocumentID, "cbp_7501", readFromText, 1, 2)

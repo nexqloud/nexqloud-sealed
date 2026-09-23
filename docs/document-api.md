@@ -222,11 +222,19 @@ unchanged. Outside dev mode a missing report is still a hard error.
    single page count or a single browser tab, and whether an explicit `revoke` (receipted, advisory)
    is worth having.
 4. **Scanned pages.** `pdftotext` returns nothing for a scan, so the documents door draws the pages
-   (`pdftoppm`, 200 DPI, one more than the bound so "too long" is distinguishable) and attaches them
+   (`pdftoppm`, 400 DPI, one more than the bound so "too long" is distinguishable) and attaches them
    to the same read — same schema, same measurement, same receipt, which records `read=page_images`.
    An engine served without a vision projector rejects the request rather than silently answering
-   from nothing. Open: nobody has measured a picture read's accuracy against a hand-checked set yet,
-   and the 8-page bound is a guess at the guest's context rather than a measured limit.
+   from nothing. Each drawn page is cut into horizontal strips of at most ~4 Mpx
+   (`internal/render/bands.go`, which carries the measurement), because a vision encoder resizes any
+   image to a fixed budget of about 4,051 tokens: one image whatever its size is ~1,000 page pixels
+   per token, so a page sent whole loses its small print to the downscale, while each strip gets its
+   own budget at the resolution it was drawn at. A read whose strips do not fit the deployment's
+   context is refused `422` naming the estimated tokens and the budget, rather than handed to the
+   engine to fail at. The receipt still counts *pages*, not strips. Open: nobody has measured a
+   picture read's accuracy against a hand-checked set yet, and the 8-page bound is a guess at the
+   guest's context rather than a measured limit — `SEALED_READ_TOKEN_BUDGET` (default 24,000, about
+   one 400 DPI page as strips) is the measured one.
 5. **Where the grammars come from.** The schema is handed to the engine per call. If extraction quality
    needs hand-written GBNF rather than a generated schema grammar, that is a `Request.Grammar` field
    away — it is already plumbed through.

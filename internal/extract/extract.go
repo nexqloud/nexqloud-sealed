@@ -87,11 +87,17 @@ func BuildPrompt(schema json.RawMessage, document string) (string, error) {
 // The digest travels in the prompt on purpose: the receipt's prompt_hash covers the prompt string,
 // and the pictures are not in it. Naming each page by its sha256 is what ties the receipt to the
 // exact pictures that were read, rather than to a question that could have been asked of anything.
+// PageImage is one picture attached to a read: a page, or — when a page had to be cut up to keep
+// its small print readable — one horizontal strip of it.
 type PageImage struct {
 	Number   int
 	SHA256   string
 	MIMEType string
 	Bytes    int
+	// Band and Bands say where this image sits in a page that was cut up: strip 2 of 5. Bands <= 1
+	// means the whole page is in this one image, which is the ordinary case.
+	Band  int
+	Bands int
 }
 
 // BuildImagePrompt is BuildPrompt for a document that has no text layer.
@@ -112,6 +118,18 @@ func BuildImagePrompt(schema json.RawMessage, pages []PageImage) (string, error)
 	writeReadHeader(&b)
 	b.WriteString("This document has no text layer. Its pages are attached to this request as images, in\n")
 	b.WriteString("order, and they are the document: read what is printed on them, not a transcription of them.\n")
+	banded := false
+	for _, page := range pages {
+		if page.Bands > 1 {
+			banded = true
+		}
+	}
+	if banded {
+		b.WriteString("A page wider than the encoder's budget arrives as several horizontal strips, top to bottom,\n")
+		b.WriteString("each overlapping the previous one by a little: read the strips of a page as one page, and\n")
+		b.WriteString("take any value that appears in two strips once — the overlap is there so a line of print is\n")
+		b.WriteString("never cut in half.\n")
+	}
 	b.WriteString("\n")
 	writeFieldList(&b, fields, schemaFieldNotes(schema))
 	b.WriteString("\n")
@@ -120,6 +138,11 @@ func BuildImagePrompt(schema json.RawMessage, pages []PageImage) (string, error)
 		mimeType := strings.TrimSpace(page.MIMEType)
 		if mimeType == "" {
 			mimeType = "image/png"
+		}
+		if page.Bands > 1 && page.Band > 0 {
+			fmt.Fprintf(&b, "  - page %d, strip %d of %d: %s, %d bytes, sha256=%s\n",
+				page.Number, page.Band, page.Bands, mimeType, page.Bytes, page.SHA256)
+			continue
 		}
 		fmt.Fprintf(&b, "  - page %d: %s, %d bytes, sha256=%s\n", page.Number, mimeType, page.Bytes, page.SHA256)
 	}

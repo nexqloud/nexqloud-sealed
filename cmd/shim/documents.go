@@ -620,6 +620,10 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 	// pictures instead of characters. What the read was made from travels in the receipt, because
 	// a text read and a picture read of the same document are different evidence.
 	readFrom := readFromText
+	// pagesDrawn is how many pages the pictures were drawn from. The receipt counts the document's
+	// pages, not the strips a page may have been cut into — a strip count would make `pages=3` mean
+	// something different from what the caller sent.
+	pagesDrawn := 0
 	var (
 		images     []inference.Image
 		imagePages []extract.PageImage
@@ -650,21 +654,45 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+		var bands []render.Band
 		for i, page := range rendered {
-			digest := docwire.Digest(page)
-			log.Printf("[sealed] read:   page %d/%d → image %s (%d KiB)",
-				i+1, len(rendered), digest[:12], len(page)>>10)
-			imagePages = append(imagePages, extract.PageImage{
-				Number:   i + 1,
-				SHA256:   digest,
-				MIMEType: "image/png",
-				Bytes:    len(page),
-			})
-			images = append(images, inference.Image{MIMEType: "image/png", Data: page})
+			strips, bandErr := render.SplitBands(page, readBandMaxPixels())
+			if bandErr != nil {
+				// Banding is an optimisation of what the model is shown, never a reason to refuse a
+				// document: an unbandable page is still read, whole, at whatever resolution fits.
+				log.Printf("[sealed] read: page %d could not be banded (%v); attaching it whole", i+1, bandErr)
+				strips = []render.Band{{PNG: page, Pixels: 0}}
+			}
+			for j, strip := range strips {
+				digest := docwire.Digest(strip.PNG)
+				log.Printf("[sealed] read:   page %d/%d strip %d/%d → image %s (%d KiB, ~%d tokens)",
+					i+1, len(rendered), j+1, len(strips), digest[:12], len(strip.PNG)>>10, strip.Tokens())
+				imagePages = append(imagePages, extract.PageImage{
+					Number:   i + 1,
+					Band:     j + 1,
+					Bands:    len(strips),
+					SHA256:   digest,
+					MIMEType: "image/png",
+					Bytes:    len(strip.PNG),
+				})
+				images = append(images, inference.Image{MIMEType: "image/png", Data: strip.PNG})
+			}
+			bands = append(bands, strips...)
 		}
-		log.Printf("[sealed] read: %s has no text layer — the read is made from %d page image(s) at %d DPI, not from text",
-			documentID, len(rendered), readDPIFromEnv())
+		estimated := render.BandTokens(bands)
+		log.Printf("[sealed] read: %s has no text layer — the read is made from %d page(s) as %d image(s) at %d DPI, about %d prompt tokens",
+			documentID, len(rendered), len(images), readDPIFromEnv(), estimated)
+		if budget := readTokenBudget(); estimated > budget {
+			// Refusing here is the honest failure: the engine would otherwise answer 500 or drop
+			// tokens, and the caller would see "reading the document failed" with no reason.
+			log.Printf("[sealed] read: %s needs about %d prompt tokens, over the %d this deployment reads", documentID, estimated, budget)
+			http.Error(w, fmt.Sprintf(
+				"this document is %d page(s), which is about %d tokens as pictures — more than the %d this deployment reads in one go",
+				len(rendered), estimated, budget), http.StatusUnprocessableEntity)
+			return
+		}
 		readFrom = readFromPageImages
+		pagesDrawn = len(rendered)
 	} else {
 		log.Printf("[sealed] read: %s read from its text layer (%d characters)",
 			documentID, len(text))
@@ -737,7 +765,7 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 	// drawn and shown to the model.
 	pagesRead := len(render.PageTexts(text))
 	if readFrom == readFromPageImages {
-		pagesRead = len(images)
+		pagesRead = pagesDrawn
 	}
 
 	out := extractResponse{
@@ -789,28 +817,33 @@ const maxPageImageRead = 8
 
 // readDPI is how finely a page is drawn for a picture read.
 //
-// Rendering finer than about 200 DPI buys nothing: the vision encoder resizes whatever it is given
-// to a fixed token budget, so extra pixels are thrown away before the model ever sees them.
-// Measured on this deployment against the served model —
+// Rendering finer than the encoder's budget buys nothing *for a whole page*: the vision encoder
+// resizes whatever it is given to a fixed token budget, so extra pixels are thrown away before the
+// model ever sees them. Measured on this deployment against the served model —
 //
 //	200 DPI  1700x2200 ( 3.7 Mpx)  ->  3676 prompt tokens
 //	400 DPI  3400x4400 (15.0 Mpx)  ->  4051 prompt tokens
 //	600 DPI  5100x6600 (33.7 Mpx)  ->  4051 prompt tokens   (the cap)
 //
-// — i.e. one image is capped near 4,000 tokens (~3.2 Mpx), and a page rendered at 400 DPI is
-// therefore *downscaled* to that budget, which is slightly worse than 200 DPI rather than better.
+// — i.e. one image is capped near 4,000 tokens (~4 Mpx), and a page rendered at 400 DPI and sent
+// whole is *downscaled* to that budget: slightly worse than 200 DPI, not better.
 //
-// What that means for reading small print: a whole 200 DPI letter page spends about 1,000 pixels
-// per token, so an eight-point figure in a 7501's line grid (about 22 px tall) falls inside a
-// single token and cannot be read at all — which is why a scan read returned the large header
-// fields and null for every grid field, while the same form's text layer read them at 0.99
-// confidence. Raising the DPI cannot fix that. Giving the *region* its own image can: the same
-// 4,000-token budget spent on the grid instead of the whole page resolves about four times finer.
-// That is a change of what is attached, not of how it is rendered.
+// What that means for small print: a whole 200 DPI letter page spends about 1,000 pixels per token,
+// so an eight-point figure in a 7501's line grid (about 22 px tall) falls inside a single token and
+// cannot be read at all — which is why a scan read returned the large header fields and null for
+// every grid field, while the same form's text layer read them at 0.99 confidence.
 //
-// SEALED_READ_DPI overrides the render; SEALED_READ_PAGE_LIMIT overrides the page bound. The page
-// bound belongs with the engine's context: one page costs about 3,700 prompt tokens at 200 DPI.
-const readDPI = 200
+// The budget is *per image*, so the fix is not a finer render of the same picture but several
+// pictures: the page is drawn at readDPI and cut into strips, each inside the budget, so every
+// strip gets its own 4,000 tokens at the resolution it was drawn at (render.SplitBands, which
+// carries the measurements). At 400 DPI a letter page is about 15 Mpx, i.e. four or five strips and
+// about 15,000 prompt tokens — roughly four times the effective resolution of one 200 DPI page, for
+// about four times the context.
+//
+// SEALED_READ_DPI overrides the render, SEALED_READ_PAGE_LIMIT the page bound, and
+// SEALED_READ_TOKEN_BUDGET the context a read may spend. The page bound belongs with the engine's
+// context: one page costs about 15,000 prompt tokens as strips at 400 DPI.
+const readDPI = 400
 
 // readDPIFromEnv is the render resolution a picture read uses.
 func readDPIFromEnv() int {
@@ -820,6 +853,33 @@ func readDPIFromEnv() int {
 		}
 	}
 	return readDPI
+}
+
+// readBandMaxPixels is the most one strip may carry. It sits just under the encoder's measured
+// budget, so a strip keeps the model's full attention instead of being downscaled like the page it
+// came from.
+func readBandMaxPixels() int {
+	if value := strings.TrimSpace(os.Getenv("SEALED_READ_BAND_PIXELS")); value != "" {
+		if pixels, err := strconv.Atoi(value); err == nil && pixels > 0 {
+			return pixels
+		}
+	}
+	return render.MaxImagePixels
+}
+
+// readTokenBudget is how much of the engine's context one read may spend on pictures.
+//
+// This is a refusal, not a truncation: a read whose pictures do not fit is answered with the two
+// numbers rather than handed to the engine to fail at or silently drop. The default matches the
+// context this deployment is served with — one 400 DPI page as strips is about 15,000 tokens, so
+// two pages fit with room for the prompt and the answer.
+func readTokenBudget() int {
+	if value := strings.TrimSpace(os.Getenv("SEALED_READ_TOKEN_BUDGET")); value != "" {
+		if budget, err := strconv.Atoi(value); err == nil && budget > 0 {
+			return budget
+		}
+	}
+	return 24000
 }
 
 // readPageLimitFromEnv is how many pages one picture read covers.
