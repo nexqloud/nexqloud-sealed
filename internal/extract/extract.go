@@ -163,17 +163,25 @@ func writeReadHeader(b *strings.Builder) {
 func writeFieldList(b *strings.Builder, fields []string, notes map[string]schemaFieldNote) {
 	b.WriteString("The fields are:\n")
 	for _, field := range fields {
-		note := notes[field]
-		switch {
-		case note.Description != "" && len(note.Enum) > 0:
-			fmt.Fprintf(b, "  - %s: %s (one of: %s)\n", field, note.Description, quoted(note.Enum))
-		case note.Description != "":
-			fmt.Fprintf(b, "  - %s: %s\n", field, note.Description)
-		case len(note.Enum) > 0:
-			fmt.Fprintf(b, "  - %s (one of: %s)\n", field, quoted(note.Enum))
-		default:
-			fmt.Fprintf(b, "  - %s\n", field)
-		}
+		writeFieldNote(b, "  ", field, notes[field])
+	}
+}
+
+// writeFieldNote writes one field, and — for a list of objects — the fields of each entry as an
+// indented list beneath it, so the model can see what a grid line is made of. The wording for a
+// plain field is unchanged from when this was a switch, because the prompt is hashed into a
+// receipt.
+func writeFieldNote(b *strings.Builder, indent, name string, note schemaFieldNote) {
+	line := indent + "- " + name
+	if note.Description != "" {
+		line += ": " + note.Description
+	}
+	if len(note.Enum) > 0 {
+		line += " (one of: " + quoted(note.Enum) + ")"
+	}
+	b.WriteString(line + "\n")
+	for _, item := range note.Items {
+		writeFieldNote(b, indent+"    ", item.Name, item)
 	}
 }
 
@@ -197,76 +205,116 @@ func schemaFields(schema json.RawMessage) ([]string, error) {
 	return fields, nil
 }
 
-// fieldShape is what the caller asked a field to be: one value, or a list of them.
-type fieldShape struct {
-	kind  string
-	items any
-}
-
-const (
-	shapeValue = "value"
-	shapeList  = "list"
-)
-
-// schemaFieldShapes reads the *shape* of each field out of the caller's schema.
-//
-// Everything else about a field can be relaxed — a page prints what it prints, and a model that
-// cannot coerce it should say so — but a list is not a preference about formatting: it is how many
-// answers there are. A grammar that allows only a string leaves a model that can see three tariff
-// codes no legal way to report them.
-func schemaFieldShapes(schema json.RawMessage) map[string]fieldShape {
+// schemaProperties is the caller's own property map, which is where a field's *shape* comes from.
+func schemaProperties(schema json.RawMessage) map[string]json.RawMessage {
 	var parsed struct {
 		Properties map[string]json.RawMessage `json:"properties"`
 	}
 	if err := json.Unmarshal(schema, &parsed); err != nil {
 		return nil
 	}
-	shapes := make(map[string]fieldShape, len(parsed.Properties))
-	for name, raw := range parsed.Properties {
-		shapes[name] = schemaFieldShape(raw)
-	}
-	return shapes
+	return parsed.Properties
 }
 
-func schemaFieldShape(raw json.RawMessage) fieldShape {
-	var prop struct {
+// maxEnvelopeDepth is how much structure survives into the grammar: a list of objects whose fields
+// may themselves be lists (a grid line, and the codes printed on it). Deeper than that is not a
+// form, and a grammar nobody has read is worse than a plain string.
+const maxEnvelopeDepth = 2
+
+// envelopeProperty narrows one of the caller's properties into what the engine may be held to.
+//
+// A scalar becomes a string or null. A pattern or a number type must not reach the engine: measured
+// against a llama.cpp guest, that coerced "USD 18,402.00" to 18402 and "none" to null, so the
+// formatting a caller asked for is dropped on purpose, and null stays legal — "no answer" is an
+// answer a caller can see and route to review.
+//
+// A *shape* survives, because a shape is not formatting: a list is how many answers there are, and a
+// list of objects is which answers belong together. Flattened to a string, a model that can see
+// three tariff codes or four grid lines has no legal way to report them, and answers null.
+func envelopeProperty(raw json.RawMessage, depth int) any {
+	property := map[string]any{"type": []string{"string", "null"}}
+	if len(raw) == 0 {
+		return property
+	}
+	var parsed struct {
 		Type  json.RawMessage `json:"type"`
+		Enum  []any           `json:"enum"`
 		Items json.RawMessage `json:"items"`
 	}
-	if err := json.Unmarshal(raw, &prop); err != nil {
-		return fieldShape{kind: shapeValue}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return property
 	}
-	var single string
-	if err := json.Unmarshal(prop.Type, &single); err == nil {
-		if single == "array" {
-			return fieldShape{kind: shapeList, items: itemSchema(prop.Items)}
+	if len(parsed.Enum) > 0 {
+		// A caller's closed set of values is the one constraint that survives: it cannot coerce
+		// what a page prints, and it is what makes a *choice* closed rather than open-ended.
+		property["enum"] = append(append([]any{}, parsed.Enum...), nil)
+		return property
+	}
+	if !isArrayKind(parsed.Type) || depth >= maxEnvelopeDepth {
+		return property
+	}
+	return map[string]any{"type": []string{"array", "null"}, "items": envelopeItems(parsed.Items, depth+1)}
+}
+
+// envelopeItems narrows what a list holds.
+func envelopeItems(raw json.RawMessage, depth int) any {
+	fallback := map[string]any{"type": []string{"string", "null"}}
+	var parsed struct {
+		Type       json.RawMessage            `json:"type"`
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil || depth > maxEnvelopeDepth {
+		return fallback
+	}
+	var kind string
+	if err := json.Unmarshal(parsed.Type, &kind); err != nil || kind == "" {
+		if len(parsed.Properties) == 0 {
+			return fallback
 		}
-		return fieldShape{kind: shapeValue}
+		kind = "object"
+	}
+	switch kind {
+	case "object":
+		names := make([]string, 0, len(parsed.Properties))
+		for name := range parsed.Properties {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		properties := make(map[string]any, len(names))
+		for _, name := range names {
+			properties[name] = envelopeProperty(parsed.Properties[name], depth)
+		}
+		// Every field of an entry is required, so an entry cannot arrive half-written: null is
+		// how the model says a box on that line was blank.
+		return map[string]any{
+			"type":                 "object",
+			"properties":           properties,
+			"required":             names,
+			"additionalProperties": false,
+		}
+	case "array":
+		return map[string]any{"type": "array", "items": fallback}
+	case "string", "number", "integer", "boolean":
+		return map[string]any{"type": []string{kind, "null"}}
+	}
+	return fallback
+}
+
+// isArrayKind reports whether a caller's JSON type is (or includes) an array.
+func isArrayKind(raw json.RawMessage) bool {
+	var single string
+	if err := json.Unmarshal(raw, &single); err == nil {
+		return single == "array"
 	}
 	var kinds []string
-	if err := json.Unmarshal(prop.Type, &kinds); err == nil {
+	if err := json.Unmarshal(raw, &kinds); err == nil {
 		for _, kind := range kinds {
 			if kind == "array" {
-				return fieldShape{kind: shapeList, items: itemSchema(prop.Items)}
+				return true
 			}
 		}
 	}
-	return fieldShape{kind: shapeValue}
-}
-
-// itemSchema keeps the caller's item type when it is simple enough to be a grammar, and falls back
-// to a string, which is what every list in this caller's schemas holds.
-func itemSchema(raw json.RawMessage) any {
-	var items struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(raw, &items); err == nil {
-		switch items.Type {
-		case "string", "number", "integer", "boolean":
-			return map[string]any{"type": items.Type}
-		}
-	}
-	return map[string]any{"type": "string"}
+	return false
 }
 
 // Fields exposes a schema's field names, so a caller can ask for a confidence for
@@ -277,6 +325,12 @@ func Fields(schema json.RawMessage) ([]string, error) { return schemaFields(sche
 type schemaFieldNote struct {
 	Description string
 	Enum        []any
+	// Name is a sub-field's own name, set only on the entries of Items.
+	Name string
+	// Items are the fields of a list-of-objects field, in sorted order: a grid line's fields. The
+	// prompt has to name them, or the model is asked for "lines" and told nothing about what a
+	// line is.
+	Items []schemaFieldNote
 }
 
 // schemaFieldNotes reads each property's description and, when the caller declared one, the
@@ -290,26 +344,54 @@ type schemaFieldNote struct {
 // prompt — the descriptions the callers wrote were never reaching the model.
 func schemaFieldNotes(schema json.RawMessage) map[string]schemaFieldNote {
 	var parsed struct {
-		Properties map[string]struct {
-			Description string `json:"description"`
-			Enum        []any  `json:"enum"`
-		} `json:"properties"`
+		Properties map[string]json.RawMessage `json:"properties"`
 	}
 	if err := json.Unmarshal(schema, &parsed); err != nil {
 		return nil
 	}
 	notes := make(map[string]schemaFieldNote, len(parsed.Properties))
-	for name, property := range parsed.Properties {
-		note := schemaFieldNote{
-			Description: strings.TrimSpace(property.Description),
-			Enum:        property.Enum,
-		}
-		if note.Description == "" && len(note.Enum) == 0 {
+	for name, raw := range parsed.Properties {
+		note := schemaFieldNoteFromProperty(raw)
+		if note.Description == "" && len(note.Enum) == 0 && len(note.Items) == 0 {
 			continue
 		}
 		notes[name] = note
 	}
 	return notes
+}
+
+// schemaFieldNoteFromProperty reads one property: its description, its closed set of values, and —
+// for a list of objects — the fields of each entry, which the prompt has to spell out.
+func schemaFieldNoteFromProperty(raw json.RawMessage) schemaFieldNote {
+	var property struct {
+		Description string          `json:"description"`
+		Enum        []any           `json:"enum"`
+		Items       json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &property); err != nil {
+		return schemaFieldNote{}
+	}
+	note := schemaFieldNote{
+		Description: strings.TrimSpace(property.Description),
+		Enum:        property.Enum,
+	}
+	var items struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(property.Items, &items); err != nil || len(items.Properties) == 0 {
+		return note
+	}
+	names := make([]string, 0, len(items.Properties))
+	for name := range items.Properties {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		sub := schemaFieldNoteFromProperty(items.Properties[name])
+		sub.Name = name
+		note.Items = append(note.Items, sub)
+	}
+	return note
 }
 
 // quoted renders an allowed-value list the way the prompt should read it.
@@ -345,25 +427,20 @@ func EnvelopeSchema(schema json.RawMessage) (json.RawMessage, error) {
 	}
 	notes := schemaFieldNotes(schema)
 	properties := make(map[string]any, len(fields))
-	shapes := schemaFieldShapes(schema)
+	caller := schemaProperties(schema)
 	for _, field := range fields {
-		value := map[string]any{"type": []string{"string", "null"}}
-		// A field the caller asked for as a *list* stays a list. Narrowing it to a string
-		// would leave "answer with a list" illegal in the grammar, so a model that can see
-		// three tariff codes would have no legal way to say so and would answer null — a
-		// field reported as "not read" while the code is plainly printed on the page.
-		if shape, ok := shapes[field]; ok && shape.kind == shapeList {
-			value = map[string]any{"type": []string{"array", "null"}, "items": shape.items}
-		}
+		// The caller's own shape decides what a field may hold — see envelopeProperty for why a
+		// scalar is narrowed to a string and a list is kept a list.
+		property := envelopeProperty(caller[field], 0).(map[string]any)
 		// A caller's closed set of values is the one constraint that survives: it cannot
 		// coerce what a page prints — which is exactly why patterns and number types are
 		// dropped above — and it is what makes a *choice* (this document is one of these
 		// kinds) closed rather than open-ended. null stays legal, so "no answer" is still an
 		// answer a caller can see and route to review.
 		if values := notes[field].Enum; len(values) > 0 {
-			value["enum"] = append(append([]any{}, values...), nil)
+			property["enum"] = append(append([]any{}, values...), nil)
 		}
-		properties[field] = value
+		properties[field] = property
 	}
 	return json.Marshal(map[string]any{
 		"type": "object",

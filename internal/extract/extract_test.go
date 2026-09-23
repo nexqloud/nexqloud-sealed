@@ -368,13 +368,114 @@ func TestEnvelopeSchemaKeepsAListFieldAList(t *testing.T) {
 		t.Fatalf("chapter99_lines type = %v, want array|null", list.Type)
 	}
 	var items struct {
-		Type string `json:"type"`
+		Type []string `json:"type"`
 	}
-	if err := json.Unmarshal(list.Items, &items); err != nil || items.Type != "string" {
-		t.Fatalf("chapter99_lines items = %s, want a string item", list.Items)
+	if err := json.Unmarshal(list.Items, &items); err != nil || strings.Join(items.Type, "|") != "string|null" {
+		t.Fatalf("chapter99_lines items = %s, want a string item that may be null", list.Items)
 	}
 	if strings.Join(fields["entry_number"].Type, "|") != "string|null" {
 		t.Fatalf("entry_number type = %v, want a single value narrowed as before", fields["entry_number"].Type)
+	}
+}
+
+func TestEnvelopeSchemaKeepsAListOfObjectsAListOfObjects(t *testing.T) {
+	// A grid line is a group of answers that belong together: an hts, a quantity, the duty on that
+	// line. Flattened to a string the model cannot say which duty went with which line, which is
+	// the whole reason a 7501's line grid is read as lines.
+	schema := json.RawMessage(`{"type":"object","properties":{` +
+		`"entry_number":{"type":["string","null"]},` +
+		`"lines":{"type":["array","null"],"items":{"type":"object","properties":{` +
+		`"hts_10":{"type":["string","null"],"description":"column 33, on the line"},` +
+		`"duty":{"type":["number","null"]},` +
+		`"codes":{"type":["array","null"],"items":{"type":"string"}}},` +
+		`"required":["hts_10","duty"]}}}}`)
+
+	got, err := EnvelopeSchema(schema)
+	if err != nil {
+		t.Fatalf("EnvelopeSchema: %v", err)
+	}
+
+	var envelope struct {
+		Properties map[string]struct {
+			Properties map[string]struct {
+				Type  []string `json:"type"`
+				Items struct {
+					Type                 string `json:"type"`
+					Required             []string
+					AdditionalProperties bool `json:"additionalProperties"`
+					Properties           map[string]struct {
+						Type []any `json:"type"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"properties"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(got, &envelope); err != nil {
+		t.Fatalf("envelope is not json: %v", err)
+	}
+	lines, ok := envelope.Properties["fields"].Properties["lines"]
+	if !ok {
+		t.Fatalf("the lines field is missing: %s", got)
+	}
+	if strings.Join(lines.Type, "|") != "array|null" {
+		t.Fatalf("lines type = %v, want array|null", lines.Type)
+	}
+	if lines.Items.Type != "object" {
+		t.Fatalf("lines items = %q, want an object with the line's own fields", lines.Items.Type)
+	}
+	if strings.Join(lines.Items.Required, ",") != "codes,duty,hts_10" {
+		t.Fatalf("a line requires %v, want every field so a line cannot arrive half-written", lines.Items.Required)
+	}
+	if lines.Items.AdditionalProperties {
+		t.Fatal("a line must not carry fields the caller did not ask for")
+	}
+	for _, field := range []string{"hts_10", "duty", "codes"} {
+		if _, ok := lines.Items.Properties[field]; !ok {
+			t.Fatalf("the line's %s is missing: %s", field, got)
+		}
+	}
+	// A number on the page arrives as the string it is printed as, and null stays legal.
+	if kinds := lines.Items.Properties["duty"].Type; len(kinds) != 2 || kinds[0] != "string" || kinds[1] != "null" {
+		t.Fatalf("duty types = %v, want string|null: the page prints USD 1,234.00", kinds)
+	}
+}
+
+func TestThePromptNamesWhatALineIsMadeOf(t *testing.T) {
+	// Asked for "lines" and told nothing about a line, a model will answer with a string or a null.
+	schema := json.RawMessage(`{"type":"object","properties":{` +
+		`"lines":{"type":["array","null"],"description":"the grid's rows, top to bottom","items":{"type":"object","properties":{` +
+		`"hts_10":{"type":["string","null"],"description":"column 33 HTSUS No."},` +
+		`"qty":{"type":["number","null"],"description":"column 35 net quantity"}}}}}}`)
+	notes := schemaFieldNotes(schema)
+
+	var b strings.Builder
+	writeFieldList(&b, []string{"lines"}, notes)
+	want := "The fields are:\n" +
+		"  - lines: the grid's rows, top to bottom\n" +
+		"      - hts_10: column 33 HTSUS No.\n" +
+		"      - qty: column 35 net quantity\n"
+	if b.String() != want {
+		t.Fatalf("prompt =\n%s\nwant\n%s", b.String(), want)
+	}
+}
+
+func TestASchemaWithNoStructureObeyesTheSameRuleAsBefore(t *testing.T) {
+	// The wording for a plain field must not drift: the prompt is hashed into a receipt.
+	notes := map[string]schemaFieldNote{
+		"a": {Description: "described", Enum: []any{"one", "two"}},
+		"b": {Description: "described"},
+		"c": {Enum: []any{"one"}},
+		"d": {},
+	}
+	var b strings.Builder
+	writeFieldList(&b, []string{"a", "b", "c", "d"}, notes)
+	want := "The fields are:\n" +
+		"  - a: described (one of: \"one\", \"two\")\n" +
+		"  - b: described\n" +
+		"  - c (one of: \"one\")\n" +
+		"  - d\n"
+	if b.String() != want {
+		t.Fatalf("prompt =\n%s\nwant\n%s", b.String(), want)
 	}
 }
 
