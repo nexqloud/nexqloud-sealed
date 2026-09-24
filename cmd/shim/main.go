@@ -33,10 +33,15 @@ import (
 const defaultAddr = ":8080"
 
 type server struct {
-	engine      *chat.Engine
-	jwksURL     string
-	tenantID    string
-	ledgerURL   string
+	engine    *chat.Engine
+	jwksURL   string
+	tenantID  string
+	ledgerURL string
+	// ledgerToken is sent as a bearer token with a receipt publish. The ledger is reached
+	// through a public edge, so the route behind it is gated: the token authorises a write
+	// of a receipt and nothing else. Empty means the publish carries no credential, which is
+	// only right when the ledger is reached over a private path that needs none.
+	ledgerToken string
 	endpointKey string
 	verifyMode  string
 	httpClient  *http.Client
@@ -70,6 +75,7 @@ func main() {
 		jwksURL:     strings.TrimSpace(*jwksURL),
 		tenantID:    strings.TrimSpace(*tenantID),
 		ledgerURL:   strings.TrimSpace(os.Getenv("NEXQLOUD_LEDGER_URL")),
+		ledgerToken: strings.TrimSpace(os.Getenv("NEXQLOUD_LEDGER_TOKEN")),
 		endpointKey: strings.TrimSpace(os.Getenv("NEXQLOUD_ENDPOINT_KEY")),
 		verifyMode:  strings.TrimSpace(os.Getenv("NEXQLOUD_VERIFY_MODE")),
 		httpClient:  &http.Client{Timeout: 5 * time.Second},
@@ -486,6 +492,12 @@ func (s *server) publishReceipt(sealedReceipt any) {
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
+		if s.ledgerToken != "" {
+			// The ledger sits behind a public route, so the publish carries the credential
+			// that route is gated by. Without it the write is refused (401) rather than
+			// silently dropped somewhere else on the path.
+			req.Header.Set("Authorization", "Bearer "+s.ledgerToken)
+		}
 		resp, err := s.httpClient.Do(req)
 		if err != nil {
 			log.Printf("ledger: publish failed: %v", err)
