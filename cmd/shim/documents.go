@@ -356,7 +356,15 @@ func (s *server) handleDocumentReadKey(w http.ResponseWriter, r *http.Request) {
 	// text to look in) is not sent at all rather than sent whole, and the grant then covers no pages.
 	var pieceParts []docwire.Named
 	redacted := false
+	// Why this container carries less than the whole of what was asked for, when it does. Set inside
+	// the redaction below and written to the header at the end, so the screen on the other side of the
+	// wire can say what happened rather than only that nothing arrived.
+	var reason string
+
 	if req.Page == pageModeRedacted && len(req.Fields) > 0 {
+		// Why nothing is being shown, when nothing is: it rides out with the container so the screen
+		// that is handed no page can say what happened instead of guessing at it.
+		reason = ""
 		painted, pieces, located, rerr := s.redactForReview(r.Context(), dek, keyVersion, sealedSource, pages, req.Fields,
 			func(ctx context.Context, fields map[string]any, drawn [][]byte, dims []redact.Page) map[string]redact.Box {
 				return s.boxesFromModel(ctx, fields, drawn, dims, req.Model, id.TenantID, req.ChallengeNonce)
@@ -365,6 +373,10 @@ func (s *server) handleDocumentReadKey(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(rerr, redact.ErrNoText), errors.Is(rerr, redact.ErrNoRegion):
 			log.Printf("document read-key: nothing of this document can be shown: %v", rerr)
 			pages = nil
+			// The log is not on the other side of the wire. A screen that can only say "no page"
+			// sends the next reader looking in the wrong place, so the sentence that says why rides
+			// with the container — field names only, never a value read off the page.
+			reason = rerr.Error()
 		case rerr != nil:
 			log.Printf("document read-key: redact: %v", rerr)
 			http.Error(w, "cannot prepare a redacted page for this review", http.StatusUnprocessableEntity)
@@ -405,6 +417,7 @@ func (s *server) handleDocumentReadKey(w http.ResponseWriter, r *http.Request) {
 		KeyVersion:   keyVersion,
 		DetectedType: "read-key-grant",
 		Redacted:     redacted,
+		Reason:       reason,
 	}
 	promptLine := canonicalReadKeyPrompt(documentID, purpose, keyVersion, len(pages), grant.Wrapped.TTLSeconds, grant.Wrapped.RecipientSHA256)
 	responseLine := canonicalReadKeyResponse(grant.Wrapped.Ephemeral)

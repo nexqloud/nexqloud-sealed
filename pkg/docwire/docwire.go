@@ -70,7 +70,12 @@ type Header struct {
 	Pieces    []Part          `json:"pieces,omitempty"`
 	ReceiptID string          `json:"receipt_id,omitempty"`
 	Receipt   json.RawMessage `json:"sealed_receipt,omitempty"`
-	Error     string          `json:"error,omitempty"`
+	Error string `json:"error,omitempty"`
+	// Reason says why this container carries less than the whole of what was asked for — a page
+	// withheld because nothing on it could be located, for instance. It is a sentence for the screen
+	// that asked, written where the answer could be found, and it never carries a value read off a
+	// document.
+	Reason string `json:"reason,omitempty"`
 }
 
 // PageCount is how many page renders the container carries.

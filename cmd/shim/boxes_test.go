@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -112,6 +113,56 @@ func TestAnAnswerWrappedInProseIsStillRead(t *testing.T) {
 	if placements["qty"].Page != 1 {
 		t.Fatalf("want the placement read back, got %+v", placements)
 	}
+}
+
+// An engine that wraps its answer in a key of its own still answered the question.
+func TestAnAnswerWrappedInAKeyOfItsOwnIsStillRead(t *testing.T) {
+	placements, err := parsePlacements(`{"regions": {"qty": {"page": 1, "box": [0.4, 0.5, 0.1, 0.04]}}}`)
+	if err != nil {
+		t.Fatalf("a wrapped answer is still an answer: %v", err)
+	}
+	if placements["qty"].Page != 1 {
+		t.Fatalf("want the placement read back, got %+v", placements)
+	}
+}
+
+// And so does an engine that answers with a list of entries.
+func TestAnAnswerThatIsAListOfEntriesIsStillRead(t *testing.T) {
+	placements, err := parsePlacements(`[{"field": "qty", "page": 2, "box": [0.1, 0.2, 0.3, 0.05]}]`)
+	if err != nil {
+		t.Fatalf("a list of entries is still an answer: %v", err)
+	}
+	if placements["qty"].Page != 2 {
+		t.Fatalf("want the placement read back, got %+v", placements)
+	}
+}
+
+// A long form is asked about in batches, so one unusable answer costs only its own fields.
+func TestALongFormIsAskedAboutInBatches(t *testing.T) {
+	engine := &fakeEngine{answer: `{"f1": {"page": 1, "box": [0.1, 0.1, 0.1, 0.1]}}`}
+	counting := &countingEngine{inner: engine}
+	server := &server{engine: &chat.Engine{Inference: counting}}
+
+	fields := map[string]any{}
+	for index := 0; index < maxBoxFields+3; index++ {
+		fields[fmt.Sprintf("f%d", index)] = index
+	}
+	server.boxesFromModel(context.Background(), fields,
+		[][]byte{pagePNG(t, 1224, 1584)}, []redact.Page{{Number: 1, Width: 612, Height: 792}}, "qwen", "", "")
+
+	if counting.calls != 2 {
+		t.Fatalf("%d fields in batches of %d is 2 questions, got %d", len(fields), maxBoxFields, counting.calls)
+	}
+}
+
+type countingEngine struct {
+	inner inference.Backend
+	calls int
+}
+
+func (c *countingEngine) Complete(req inference.Request) (inference.Response, error) {
+	c.calls++
+	return c.inner.Complete(req)
 }
 
 func TestNoEngineMeansNoRegion(t *testing.T) {

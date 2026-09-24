@@ -87,6 +87,13 @@ func (s *server) redactForReview(ctx context.Context, dek []byte, keyVersion int
 	}
 
 	if len(found) == 0 {
+		// Said plainly, because this sentence is what the reviewer's screen repeats: a scan that the
+		// engine could not place is a different fact from a form that does not print a value.
+		if redact.Textless(text) {
+			return nil, nil, 0, fmt.Errorf(
+				"%w: this page carries no text to find a value in — it is a scan — and the engine placed none of: %s",
+				redact.ErrNoRegion, joinFields(missing))
+		}
 		return nil, nil, 0, fmt.Errorf("%w (%s)", redact.ErrNoRegion, joinFields(missing))
 	}
 	if len(missing) > 0 {

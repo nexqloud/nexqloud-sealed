@@ -157,6 +157,16 @@ when the pages were painted out, a reader must refuse a page part that is not de
 covers the pages actually returned, so an unredacted render of a secret document never leaves the
 enclave.
 
+When a container carries less than what was asked for, `header.reason` says why in a sentence written
+where the answer could be found — *"this page carries no text to find a value in — it is a scan — and
+the engine placed none of: …"*. It names fields, never a value read off a page. A screen handed no
+page repeats that sentence rather than guessing, and the person reading it can tell a scan from a
+missing location from a form that does not print a value.
+
+The locating question is put in batches of a few values rather than all of them at once: an engine
+asked about a whole long form tends to answer in a shape it was not asked for, and one such answer
+would otherwise cost every field on the document. A batch that fails costs only its own fields.
+
 **Omit `page` and you get the pages as they are.** That is not a fallback, it is a mode: a caller that
 has not asked for a redaction has nothing to have withheld, `header.redacted` stays unset, and the
 pages are still sealed to the recipient and still expire. A deployment that wants the old behaviour —
