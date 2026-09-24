@@ -166,6 +166,34 @@ func (c *countingEngine) Complete(req inference.Request) (inference.Response, er
 	return c.inner.Complete(req)
 }
 
+// The pixel space an answer can be in is the one we sent, so the sent size is the one that counts.
+func TestAPageShownToTheEngineIsMeasuredAsShown(t *testing.T) {
+	_, width, height, err := pageForLocating(pagePNG(t, 2000, 1000), locateTargetPixels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if width*height > locateTargetPixels || width*height < locateTargetPixels*9/10 {
+		t.Fatalf("a 2.0 megapixel page shown within a %d budget is %dx%d = %d", locateTargetPixels, width, height, width*height)
+	}
+	_, tallWidth, tallHeight, err := pageForLocating(pagePNG(t, 800, 1600), locateTargetPixels)
+	if err != nil || tallWidth >= tallHeight {
+		t.Fatalf("a portrait page stays portrait, got %dx%d (%v)", tallWidth, tallHeight, err)
+	}
+	if tallWidth*tallHeight > locateTargetPixels {
+		t.Fatalf("a portrait page is still within the budget, got %d", tallWidth*tallHeight)
+	}
+
+	// A page already small enough is sent as it is: nothing is re-encoded for no reason.
+	small := pagePNG(t, 800, 600)
+	again, smallWidth, smallHeight, err := pageForLocating(small, locateTargetPixels)
+	if err != nil || smallWidth != 800 || smallHeight != 600 {
+		t.Fatalf("a small page keeps its size, got %d x %d (%v)", smallWidth, smallHeight, err)
+	}
+	if len(again) != len(small) {
+		t.Fatalf("a small page is not re-encoded, got %d bytes from %d", len(again), len(small))
+	}
+}
+
 // The measured failure: an engine answering in pixels for some values of the same box.
 func TestAnAnswerInPixelsIsReadAsPixels(t *testing.T) {
 	// Taken from the real answer for the bill of lading: x and y in the render's pixels, width and

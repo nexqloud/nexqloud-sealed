@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
-	_ "image/png"
+	"image/color"
+	"image/png"
 	"log"
+	"math"
 	"sort"
 	"strings"
 
@@ -42,8 +44,15 @@ func (s *server) boxesFromModel(ctx context.Context, fields map[string]any, page
 	}
 
 	images := make([]inference.Image, 0, len(pages))
-	for _, page := range pages {
-		images = append(images, inference.Image{MIMEType: "image/png", Data: page})
+	sizes := make([][2]int, 0, len(pages))
+	for index, page := range pages {
+		shown, width, height, err := pageForLocating(page, locateTargetPixels)
+		if err != nil {
+			log.Printf("document read-key: cannot prepare page %d to be shown: %v", index+1, err)
+			return nil
+		}
+		images = append(images, inference.Image{MIMEType: "image/png", Data: shown})
+		sizes = append(sizes, [2]int{width, height})
 	}
 
 	names := make([]string, 0, len(fields))
@@ -51,15 +60,6 @@ func (s *server) boxesFromModel(ctx context.Context, fields map[string]any, page
 		names = append(names, name)
 	}
 	sort.Strings(names)
-
-	// The image's own size, for the answers that come back in pixels rather than fractions.
-	imageWidth, imageHeight := 0, 0
-	if config, _, err := image.DecodeConfig(bytes.NewReader(pages[0])); err == nil {
-		imageWidth, imageHeight = config.Width, config.Height
-	}
-	if imageWidth == 0 || imageHeight == 0 {
-		log.Printf("document read-key: cannot measure the page render, so an answer in pixels could not be read")
-	}
 
 	found := map[string]redact.Box{}
 	for start := 0; start < len(names); start += maxBoxFields {
@@ -83,7 +83,8 @@ func (s *server) boxesFromModel(ctx context.Context, fields map[string]any, page
 				log.Printf("document read-key: page %d has no size, so a region on it cannot be placed", placement.Page)
 				continue
 			}
-			x, y, width, height, inPixels := inFractions(placement.Box, imageWidth, imageHeight)
+			// The size of the image the engine was shown, which is the only pixel space it can mean.
+			x, y, width, height, inPixels := inFractions(placement.Box, sizes[placement.Page-1][0], sizes[placement.Page-1][1])
 			if inPixels {
 				log.Printf("document read-key: %s was answered in page pixels, not fractions; read as pixels", field)
 			}
@@ -102,6 +103,78 @@ func (s *server) boxesFromModel(ctx context.Context, fields map[string]any, page
 	log.Printf("document read-key: the engine placed %d of %d value(s) on %d page(s) of a document with no text layer",
 		len(found), len(fields), len(pages))
 	return found
+}
+
+// locateTargetPixels is how many pixels a page may have when it is shown to the engine for locating.
+//
+// Measured against the real model, twice. Asked for fractions, it answers some values in pixels — and
+// those pixels are the pixels of the image it was actually shown, never of the render we hold. Its
+// encoder silently downscales anything above its own budget of roughly a million pixels (28x28 per
+// token, about 1280 tokens), so a 200 DPI render was being scaled by about a half and a 1280-wide page
+// by about two thirds: in both cases the boxes landed off the values and the page came back mostly
+// blank paper. Showing a page within that budget is what makes the pixel space known. The render
+// itself is still the full-resolution one — cutting and painting always use that.
+const locateTargetPixels = 1_000_000
+
+// pageForLocating returns the bytes to show, and the width and height the engine will therefore see.
+func pageForLocating(page []byte, budget int) ([]byte, int, int, error) {
+	source, _, err := image.Decode(bytes.NewReader(page))
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	bounds := source.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if width*height <= budget {
+		return page, width, height, nil
+	}
+
+	// Scaled by area, not by the long side: it is the encoder's pixel count that decides whether it
+	// silently rescales the image behind our back and takes the pixel space away from us.
+	scale := math.Sqrt(float64(budget) / float64(width*height))
+	targetWidth := int(float64(width)*scale + 0.5)
+	targetHeight := int(float64(height)*scale + 0.5)
+	if targetWidth < 1 {
+		targetWidth = 1
+	}
+	if targetHeight < 1 {
+		targetHeight = 1
+	}
+
+	target := image.NewRGBA(image.Rect(0, 0, targetWidth, targetHeight))
+	for y := 0; y < targetHeight; y++ {
+		fromY := y * height / targetHeight
+		toY := (y + 1) * height / targetHeight
+		if toY <= fromY {
+			toY = fromY + 1
+		}
+		for x := 0; x < targetWidth; x++ {
+			fromX := x * width / targetWidth
+			toX := (x + 1) * width / targetWidth
+			if toX <= fromX {
+				toX = fromX + 1
+			}
+			var red, green, blue, count uint32
+			for sourceY := fromY; sourceY < toY && sourceY < height; sourceY++ {
+				for sourceX := fromX; sourceX < toX && sourceX < width; sourceX++ {
+					r, g, bl, _ := source.At(bounds.Min.X+sourceX, bounds.Min.Y+sourceY).RGBA()
+					red += r >> 8
+					green += g >> 8
+					blue += bl >> 8
+					count++
+				}
+			}
+			if count == 0 {
+				continue
+			}
+			target.Set(x, y, color.RGBA{uint8(red / count), uint8(green / count), uint8(blue / count), 255})
+		}
+	}
+
+	var out bytes.Buffer
+	if err := png.Encode(&out, target); err != nil {
+		return nil, 0, 0, err
+	}
+	return out.Bytes(), targetWidth, targetHeight, nil
 }
 
 // inFractions reads an answer that may not be in the units it was asked for.
