@@ -1,0 +1,7 @@
+# The address that should appear for commits whose author was recorded wrongly.
+#
+# Two commits on `stage` were made with an address Zakaria does not own
+# (zakaria@nexqloud.com), because it was passed on the command line instead of letting this
+# repository's own configuration apply. Git reads this file for `log`, `shortlog` and blame, so those
+# commits show the right identity without rewriting published history.
+Zakaria Boualaid <zboualaid@nexqloud.io> Zakaria Boualaid <zakaria@nexqloud.com>
