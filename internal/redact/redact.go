@@ -349,6 +349,23 @@ func NormalisedBox(page int, x, y, width, height, pageWidth, pageHeight float64)
 	return Box{Page: page, Left: left, Top: top, Right: right, Bottom: bottom}
 }
 
+// Splitter reads a document's words and the boxes they occupy on each page.
+//
+// It exists so the two sides of the product can be tested without a real document, and so a
+// deployment that reads words another way can be swapped in: everything above it deals in pages of
+// words, not in how they were obtained.
+type Splitter interface {
+	Pages(ctx context.Context, source []byte) ([]Page, error)
+}
+
+// Exec is the splitter the guest provides: poppler's own words, read from the document the enclave
+// holds. A page with no words is still a page here — it has a size and no text, which is what a scan
+// is — so this reports the failure to read the document rather than the absence of text.
+type Exec struct{}
+
+// Pages reads the words and boxes of every page.
+func (Exec) Pages(ctx context.Context, source []byte) ([]Page, error) { return Split(ctx, source) }
+
 // Split asks the document what it says and where. This is the only step that leaves the process.
 func Split(ctx context.Context, source []byte) ([]Page, error) {
 	dir, err := os.MkdirTemp("", "redact-")

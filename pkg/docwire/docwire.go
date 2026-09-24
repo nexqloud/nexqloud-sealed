@@ -67,10 +67,16 @@ type Header struct {
 	// check this and refuse a container that does not carry it.
 	Redacted bool `json:"redacted,omitempty"`
 	// Pieces are the named regions of a page, one per value under review, carried after the pages.
-	Pieces    []Part          `json:"pieces,omitempty"`
+	Pieces []Part `json:"pieces,omitempty"`
+	// Regions is where an extraction located each value it read, sealed under the document's own key:
+	// one part, carried after the pieces. It travels in the container the caller keeps — there is
+	// nowhere else for it to live, since this side never writes to the caller's storage — and a later
+	// read-key answers from it instead of locating the same values a second time. It is a pointer so
+	// a container without regions does not describe an empty one.
+	Regions   *Part           `json:"regions,omitempty"`
 	ReceiptID string          `json:"receipt_id,omitempty"`
 	Receipt   json.RawMessage `json:"sealed_receipt,omitempty"`
-	Error string `json:"error,omitempty"`
+	Error     string          `json:"error,omitempty"`
 	// Reason says why this container carries less than the whole of what was asked for — a page
 	// withheld because nothing on it could be located, for instance. It is a sentence for the screen
 	// that asked, written where the answer could be found, and it never carries a value read off a
@@ -94,7 +100,7 @@ func (h Header) TotalBytes() int {
 // and digests are computed here from the bytes actually written, so a caller
 // cannot describe a container that says something other than what it holds.
 func Encode(w io.Writer, h Header, source []byte, pages [][]byte) error {
-	return encodeParts(w, h, source, pages, nil)
+	return encodeParts(w, h, source, pages, nil, nil)
 }
 
 // Named is a part with the name it travels under.
@@ -103,13 +109,27 @@ type Named struct {
 	Bytes []byte
 }
 
+// Extras are the parts that follow the pages: the pieces of a page a reviewer was shown, and the
+// regions an extraction located on it. Both are optional and both are sealed ciphertext by the time
+// they reach here — this package frames bytes and never looks inside one.
+type Extras struct {
+	Pieces  []Named
+	Regions []byte
+}
+
 // EncodeExtras writes a container that also carries named parts: the pieces of a page a reviewer was
 // shown. They follow the pages, in the order the header names them.
 func EncodeExtras(w io.Writer, h Header, source []byte, pages [][]byte, pieces []Named) error {
-	return encodeParts(w, h, source, pages, pieces)
+	return encodeParts(w, h, source, pages, pieces, nil)
 }
 
-func encodeParts(w io.Writer, h Header, source []byte, pages [][]byte, pieces []Named) error {
+// EncodeFull writes a container that also carries regions: where an extraction located each value it
+// read. They follow the pieces.
+func EncodeFull(w io.Writer, h Header, source []byte, pages [][]byte, extras Extras) error {
+	return encodeParts(w, h, source, pages, extras.Pieces, extras.Regions)
+}
+
+func encodeParts(w io.Writer, h Header, source []byte, pages [][]byte, pieces []Named, extra []byte) error {
 	if len(source) == 0 {
 		return errors.New("docwire: empty source")
 	}
@@ -140,6 +160,18 @@ func encodeParts(w io.Writer, h Header, source []byte, pages [][]byte, pieces []
 		total += int64(len(piece.Bytes))
 		named = append(named, describe(piece.Name, piece.Bytes))
 	}
+	var regions *Part
+	if extra != nil {
+		if len(extra) == 0 {
+			return errors.New("docwire: regions are empty")
+		}
+		if len(extra) > MaxPartBytes {
+			return fmt.Errorf("%w: regions are %d bytes", ErrTooLarge, len(extra))
+		}
+		total += int64(len(extra))
+		described := describe(RegionsName, extra)
+		regions = &described
+	}
 	if total > MaxTotalBytes {
 		return fmt.Errorf("%w: %d bytes", ErrTooLarge, total)
 	}
@@ -148,6 +180,7 @@ func encodeParts(w io.Writer, h Header, source []byte, pages [][]byte, pieces []
 	h.Source = describe("source", source)
 	h.Pages = parts
 	h.Pieces = named
+	h.Regions = regions
 
 	header, err := json.Marshal(h)
 	if err != nil {
@@ -179,67 +212,135 @@ func encodeParts(w io.Writer, h Header, source []byte, pages [][]byte, pieces []
 			return err
 		}
 	}
+	if regions != nil {
+		if _, err := w.Write(extra); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-// Decode reads a container and verifies every part against its digest. It returns
-// the header, the source and the pages in the order the header listed them.
+// Parts is a container's parts by the role the header gives them, each verified against its digest
+// before it is handed back. A reader that knows which part it wants asks for it here rather than
+// counting positions.
+type Parts struct {
+	Source  []byte
+	Pages   [][]byte
+	Pieces  []Named
+	Regions []byte
+}
+
+// DecodeParts reads a container and returns every part it describes, by role.
+//
+// Every part is verified, including the ones this caller has no use for: a container that does not
+// match its own header is not a container.
+func DecodeParts(r io.Reader) (Header, Parts, error) {
+	var out Parts
+	h, blobs, err := decodeParts(r)
+	if err != nil {
+		return Header{}, out, err
+	}
+
+	// The blobs arrive in the order the header lists them, which is the order they were written:
+	// source, then the pages, then the pieces, then the regions.
+	out.Source = blobs[0]
+	at := 1
+	out.Pages = make([][]byte, 0, len(h.Pages))
+	for range h.Pages {
+		out.Pages = append(out.Pages, blobs[at])
+		at++
+	}
+	out.Pieces = make([]Named, 0, len(h.Pieces))
+	for _, piece := range h.Pieces {
+		out.Pieces = append(out.Pieces, Named{Name: piece.Name, Bytes: blobs[at]})
+		at++
+	}
+	if h.Regions != nil {
+		out.Regions = blobs[at]
+	}
+	return h, out, nil
+}
+
+// Decode reads a container and verifies every part against its digest. It returns the header, the
+// source and everything after it — the pages, then the pieces, but never the regions, which are not
+// a page and must not be mistaken for one.
 func Decode(r io.Reader) (Header, []byte, [][]byte, error) {
+	h, parts, err := DecodeParts(r)
+	if err != nil {
+		return Header{}, nil, nil, err
+	}
+	rest := make([][]byte, 0, len(parts.Pages)+len(parts.Pieces))
+	rest = append(rest, parts.Pages...)
+	for _, piece := range parts.Pieces {
+		rest = append(rest, piece.Bytes)
+	}
+	return h, parts.Source, rest, nil
+}
+
+// RegionsName is the name the located-regions part travels under. A caller that appends that part to
+// a container writes this name in the header entry, so the two sides agree without either of them
+// inventing it.
+const RegionsName = "regions"
+
+func decodeParts(r io.Reader) (Header, [][]byte, error) {
 	magic := make([]byte, len(Magic))
 	if _, err := io.ReadFull(r, magic); err != nil {
-		return Header{}, nil, nil, fmt.Errorf("%w: %v", ErrNotDocwire, err)
+		return Header{}, nil, fmt.Errorf("%w: %v", ErrNotDocwire, err)
 	}
 	if string(magic) != Magic {
-		return Header{}, nil, nil, ErrNotDocwire
+		return Header{}, nil, ErrNotDocwire
 	}
 
 	var headerLen uint32
 	if err := binary.Read(r, binary.BigEndian, &headerLen); err != nil {
-		return Header{}, nil, nil, fmt.Errorf("%w: header length: %v", ErrNotDocwire, err)
+		return Header{}, nil, fmt.Errorf("%w: header length: %v", ErrNotDocwire, err)
 	}
 	if headerLen == 0 || headerLen > MaxHeaderBytes {
-		return Header{}, nil, nil, fmt.Errorf("%w: header length %d", ErrNotDocwire, headerLen)
+		return Header{}, nil, fmt.Errorf("%w: header length %d", ErrNotDocwire, headerLen)
 	}
 
 	raw := make([]byte, headerLen)
 	if _, err := io.ReadFull(r, raw); err != nil {
-		return Header{}, nil, nil, fmt.Errorf("%w: truncated header: %v", ErrNotDocwire, err)
+		return Header{}, nil, fmt.Errorf("%w: truncated header: %v", ErrNotDocwire, err)
 	}
 
 	var h Header
 	if err := json.Unmarshal(raw, &h); err != nil {
-		return Header{}, nil, nil, fmt.Errorf("%w: header json: %v", ErrNotDocwire, err)
+		return Header{}, nil, fmt.Errorf("%w: header json: %v", ErrNotDocwire, err)
 	}
 	if h.Schema != Schema {
-		return Header{}, nil, nil, fmt.Errorf("%w: schema %q", ErrNotDocwire, h.Schema)
+		return Header{}, nil, fmt.Errorf("%w: schema %q", ErrNotDocwire, h.Schema)
 	}
 
-	// Every part is verified, including pieces this caller has no use for: a container that does not
-	// match its own header is not a container.
+	// Every part is verified, including pieces and regions this caller has no use for: a container
+	// that does not match its own header is not a container.
 	described := append([]Part{h.Source}, h.Pages...)
 	described = append(described, h.Pieces...)
+	if h.Regions != nil {
+		described = append(described, *h.Regions)
+	}
 	blobs := make([][]byte, 0, len(described))
 	total := 0
 	for i, part := range described {
 		if part.Bytes <= 0 || part.Bytes > MaxPartBytes {
-			return Header{}, nil, nil, fmt.Errorf("%w: part %d declares %d bytes", ErrNotDocwire, i, part.Bytes)
+			return Header{}, nil, fmt.Errorf("%w: part %d declares %d bytes", ErrNotDocwire, i, part.Bytes)
 		}
 		total += part.Bytes
 		if total > MaxTotalBytes {
-			return Header{}, nil, nil, fmt.Errorf("%w: %d bytes", ErrTooLarge, total)
+			return Header{}, nil, fmt.Errorf("%w: %d bytes", ErrTooLarge, total)
 		}
 
 		blob := make([]byte, part.Bytes)
 		if _, err := io.ReadFull(r, blob); err != nil {
-			return Header{}, nil, nil, fmt.Errorf("%w: part %s: %v", ErrNotDocwire, part.Name, err)
+			return Header{}, nil, fmt.Errorf("%w: part %s: %v", ErrNotDocwire, part.Name, err)
 		}
 		if part.SHA256 != Digest(blob) {
-			return Header{}, nil, nil, fmt.Errorf("%w: part %s", ErrDigestMismatch, part.Name)
+			return Header{}, nil, fmt.Errorf("%w: part %s", ErrDigestMismatch, part.Name)
 		}
 		blobs = append(blobs, blob)
 	}
 
-	return h, blobs[0], blobs[1:], nil
+	return h, blobs, nil
 }
 
 func describe(name string, blob []byte) Part {

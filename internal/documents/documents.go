@@ -39,6 +39,10 @@ const (
 	KindSource Kind = 1
 	// KindPage is one rendered page image of that document.
 	KindPage Kind = 2
+	// KindRegions is where an extraction located each value it read: a map of field to page and
+	// region, not a picture of anything. It is its own kind because it is neither the document nor a
+	// render of it, and a reader that asks for one must never be handed the other.
+	KindRegions Kind = 3
 )
 
 func (k Kind) String() string {
@@ -47,6 +51,8 @@ func (k Kind) String() string {
 		return "source"
 	case KindPage:
 		return "page"
+	case KindRegions:
+		return "regions"
 	default:
 		return fmt.Sprintf("kind(%d)", byte(k))
 	}
@@ -74,7 +80,7 @@ func Seal(dek []byte, keyVersion int, kind Kind, plaintext []byte) ([]byte, erro
 	if keyVersion <= 0 {
 		return nil, fmt.Errorf("documents: invalid key version %d", keyVersion)
 	}
-	if kind != KindSource && kind != KindPage {
+	if kind != KindSource && kind != KindPage && kind != KindRegions {
 		return nil, fmt.Errorf("documents: invalid kind %s", kind)
 	}
 
@@ -195,7 +201,7 @@ func split(envelope []byte) (keyVersion int, kind Kind, body []byte, err error) 
 	rest := envelope[len(envelopeMagic):]
 	keyVersion = int(binary.BigEndian.Uint32(rest[:4]))
 	kind = Kind(rest[4])
-	if keyVersion <= 0 || (kind != KindSource && kind != KindPage) {
+	if keyVersion <= 0 || (kind != KindSource && kind != KindPage && kind != KindRegions) {
 		return 0, 0, nil, fmt.Errorf("%w: bad header (v%d, %s)", ErrNotSealed, keyVersion, kind)
 	}
 	return keyVersion, kind, rest[5:], nil

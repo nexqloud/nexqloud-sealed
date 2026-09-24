@@ -7,6 +7,65 @@ import (
 	"testing"
 )
 
+func TestRegionsTravelAsTheirOwnPartAndAreNotPages(t *testing.T) {
+	source := []byte("sealed source")
+	pages := [][]byte{[]byte("sealed page one")}
+	piece := []byte("sealed piece")
+	regions := []byte("sealed regions")
+
+	var buf bytes.Buffer
+	if err := EncodeFull(&buf, Header{DocumentID: "x", KeyVersion: 1}, source, pages,
+		Extras{Pieces: []Named{{Name: "hts_10", Bytes: piece}}, Regions: regions}); err != nil {
+		t.Fatalf("EncodeFull: %v", err)
+	}
+
+	h, parts, err := DecodeParts(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("DecodeParts: %v", err)
+	}
+	if h.Regions == nil || h.Regions.Name != RegionsName {
+		t.Fatalf("the header does not describe the regions part: %+v", h.Regions)
+	}
+	if h.Regions.Bytes != len(regions) || h.Regions.SHA256 != Digest(regions) {
+		t.Fatalf("the regions part describes the wrong bytes: %+v", h.Regions)
+	}
+	if !bytes.Equal(parts.Source, source) || len(parts.Pages) != 1 || !bytes.Equal(parts.Pages[0], pages[0]) {
+		t.Fatal("the document did not survive the round trip")
+	}
+	if len(parts.Pieces) != 1 || parts.Pieces[0].Name != "hts_10" {
+		t.Fatalf("pieces = %+v", parts.Pieces)
+	}
+	if !bytes.Equal(parts.Regions, regions) {
+		t.Fatalf("regions round-trip = %q", parts.Regions)
+	}
+
+	// The older shape must not mistake a region for a page: a region is not a render, and opening one
+	// as though it were is how a reviewer would be shown the wrong thing.
+	_, _, rest, err := Decode(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	for i, blob := range rest {
+		if bytes.Equal(blob, regions) {
+			t.Fatalf("part %d is the regions part, handed back as though it were a page or a piece", i)
+		}
+	}
+}
+
+func TestDecodeRejectsATamperedRegionsPart(t *testing.T) {
+	var buf bytes.Buffer
+	if err := EncodeFull(&buf, Header{DocumentID: "x", KeyVersion: 1}, []byte("sealed source"), nil,
+		Extras{Regions: []byte("sealed regions")}); err != nil {
+		t.Fatalf("EncodeFull: %v", err)
+	}
+
+	container := buf.Bytes()
+	container[len(container)-1] ^= 0xff
+	if _, _, err := DecodeParts(bytes.NewReader(container)); !errors.Is(err, ErrDigestMismatch) {
+		t.Fatalf("DecodeParts of a tampered regions part = %v, want ErrDigestMismatch", err)
+	}
+}
+
 func TestRoundTrip(t *testing.T) {
 	source := []byte("\x00\x01sealed source bytes\xff")
 	pages := [][]byte{[]byte("\x89PNG\r\n\x1a\npage one"), []byte("\x89PNG\r\n\x1a\npage two")}
