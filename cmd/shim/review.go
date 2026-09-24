@@ -51,10 +51,16 @@ const pageModeRedacted = "redacted"
 // from. This side only finds them in the document it holds and removes everything else, so no rule
 // about tariffs lives here.
 //
+// `known` is what the extraction located when it read this document, when the container carries it.
+// Those values are not searched for again: the boxes are the same and finding them once was the
+// point. Everything not in it is located here, exactly as it was before there was anywhere to keep
+// them — so a container written by an older deployment, or a value the extraction could not place, is
+// answered the way it always was.
+//
 // Two failures are normal and are handed back as they are, because the caller has to be able to say
 // why nothing was shown rather than showing something unredacted: a document with no text to find a
 // value in (a scan), and a document where not one value under review could be located.
-func (s *server) redactForReview(ctx context.Context, dek []byte, keyVersion int, sealedSource []byte, pages [][]byte, fields map[string]any, locateScan func(context.Context, map[string]any, [][]byte, []redact.Page) map[string]redact.Box) (out [][]byte, pieces []docwire.Named, located int, err error) {
+func (s *server) redactForReview(ctx context.Context, dek []byte, keyVersion int, sealedSource []byte, pages [][]byte, fields map[string]any, known map[string]redact.Box, locateScan func(context.Context, map[string]any, [][]byte, []redact.Page) map[string]redact.Box) (out [][]byte, pieces []docwire.Named, located int, err error) {
 	kind, source, err := documents.Open(dek, sealedSource, keyVersion)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("open source: %w", err)
@@ -63,7 +69,7 @@ func (s *server) redactForReview(ctx context.Context, dek []byte, keyVersion int
 		return nil, nil, 0, fmt.Errorf("the container's source part is a %s", kind)
 	}
 
-	text, err := redact.Split(ctx, source)
+	text, err := s.splitter().Pages(ctx, source)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -71,18 +77,39 @@ func (s *server) redactForReview(ctx context.Context, dek []byte, keyVersion int
 		return nil, nil, 0, fmt.Errorf("the document says %d pages and carries %d renders", len(text), len(pages))
 	}
 
-	found, missing := redact.Locate(text, fields)
+	// What was already located for this document, where the container carries it. A region on a page
+	// this document does not have is not a region here.
+	found := make(map[string]redact.Box, len(fields))
+	for name := range fields {
+		box, ok := known[name]
+		if !ok || box.Page < 1 || box.Page > len(text) {
+			continue
+		}
+		found[name] = box
+	}
+
+	pending := make(map[string]any, len(fields)-len(found))
+	for name, value := range fields {
+		if _, done := found[name]; !done {
+			pending[name] = value
+		}
+	}
 
 	// A document whose pages carry no words at all is a picture, and nothing here can see where a
 	// value is printed in one. The engine that read it can: it was shown those same pages. This is
 	// the only way a scan gets a region, and a field the engine will not place stays missing.
-	if redact.Textless(text) && locateScan != nil {
-		ask := make(map[string]any, len(missing))
-		for field := range missing {
-			ask[field] = fields[field]
+	var missing map[string]struct{}
+	if len(pending) > 0 {
+		var locate func(context.Context, map[string]any) map[string]redact.Box
+		if locateScan != nil {
+			locate = func(ctx context.Context, ask map[string]any) map[string]redact.Box {
+				return locateScan(ctx, ask, pages, text)
+			}
 		}
-		for field, box := range locateScan(ctx, ask, pages, text) {
-			found[field] = box
+		var fresh map[string]redact.Box
+		fresh, missing = s.locateForReview(ctx, text, pages, pending, locate)
+		for name, box := range fresh {
+			found[name] = box
 		}
 	}
 

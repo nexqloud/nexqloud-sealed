@@ -65,9 +65,9 @@ Open question 1 (below) decides whether the rendering happens here.
 ### `POST /v1/documents/{document_id}/extract`
 
 ```
-in   { schema_id, schema, document_id, key_version, source_url, model?, challenge_nonce? }
+in   { schema_id, schema, document_id, key_version, source_url, model?, challenge_nonce?, locate? }
 out  { document_id, schema_id, model, fields, confidence, confidence_source,
-       model_confidence, pages, receipt_id, sealed_receipt }
+       model_confidence, pages, read_from, regions?, receipt_id, sealed_receipt }
 ```
 
 The document is **not** in the request. `source_url` is a presigned URL for the sealed object, which
@@ -96,6 +96,40 @@ point, so this is a requirement, not a style note.
 Status codes: 400 for a request that cannot be answered, 401 identity, 403 `ErrNoKeyMaterial` (a
 destroyed scope is an answer), 422 for a document that will not open, has no text layer, or drew an
 answer that is not a record, 502 for object storage or the engine being unreachable.
+
+#### `locate`: where each value is printed, worked out while the page is in hand
+
+`locate: true` asks the same call that reads the values where each of them is printed, and comes back
+as `regions`: the located map, sealed under the document's own envelope key, beside the description of
+that part.
+
+```
+regions: { part: { name, bytes, sha256 },          the part, as this side describes it
+           bytes_base64,                           the sealed regions themselves
+           located_from, fields, asked }
+```
+
+The caller **stores those bytes in the container it keeps** — appending the part, with the header
+entry it was given, to the container the ingest door handed out. That is the whole hand-over: this side
+never writes to the caller's storage, and the coordinates are not the caller's to read, so a caller
+copies the description rather than making up a name, a size or a digest for bytes it cannot open.
+
+What this buys is a read-key that does not repeat the work: the container it fetches already says where
+each value is printed, so the engine is not asked to find them again while a reviewer waits on the same
+page. It costs a page's words and boxes for a document with a text layer, and one model call per batch
+of values for one without — which is why it is asked for rather than always done: a caller that never
+shows a person a page is not charged for it.
+
+Nothing about it is fatal or required. A read that locates nothing returns no `regions`; a container
+written before this carries none; a review locates for itself in either case, exactly as it did before.
+`located_from` says which half did the work — `text` or `page_images` — and `fields` of `asked` says how
+many values were placed, which is the number worth watching: a page's own text is exact, and a model's
+box is not.
+
+The names are the caller's, because the caller is the side that asks for a region by name at review:
+a value inside a list of rows is `<key>.<row>.<leaf>` with rows counted from one, an absent value has
+no region, and a false flag does — `claim_fields.keep_set` in the tariff application is the other half
+of that contract.
 
 #### Confidence is measured, not claimed
 
@@ -150,6 +184,15 @@ fields under review, with each value as the caller stored it — makes this hand
 in the document it holds and paint **everything else** out of every page render before sealing one to
 the recipient (`internal/redact`). The caller is the side that knows what the claim is worked out
 from; this side only finds them and removes the rest, so no rule about tariffs lives here.
+
+**Where the values are is taken from the container when it carries it.** An extraction asked with
+`locate` sealed the regions it found into the same container, under the same key, and the caller kept
+them there — so this handler reads them out and locates only the values that container does not
+already have (the fields under review can be a wider set than the extraction's). A document whose
+regions are already in its container therefore costs the engine nothing to show, however many people
+review it. Everything else is unchanged: a container written before regions existed carries none, a
+region off this document is not a region, and this handler falls back to locating the whole set for
+itself — which is what it always did.
 
 The replacement for a whole page is what makes the rest of the promise true: `header.redacted` is set
 when the pages were painted out, a reader must refuse a page part that is not declared redacted, and

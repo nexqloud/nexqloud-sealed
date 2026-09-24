@@ -25,6 +25,7 @@ import (
 	"nexqloud-sealed/internal/inference"
 	"nexqloud-sealed/internal/keyscope"
 	"nexqloud-sealed/internal/receipt"
+	"nexqloud-sealed/internal/redact"
 	"nexqloud-sealed/internal/registry"
 	"nexqloud-sealed/internal/render"
 )
@@ -45,6 +46,9 @@ type server struct {
 	renderer render.Renderer
 	// text reads a document's text layer inside the enclosure.
 	text textExtractor
+	// words reads a page's own words and where they are printed, for locating a value on it.
+	// Empty means the guest's converter on this deployment.
+	words redact.Splitter
 	// fetcher reads a sealed object from the caller's object storage.
 	fetcher blobFetcher
 	// maxDocumentBytes caps one uploaded document. Zero means the default.

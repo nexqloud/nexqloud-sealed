@@ -217,7 +217,9 @@ type readKeyRequest struct {
 	// there is no request that returns a whole document.
 	Page string `json:"page,omitempty"`
 	// Fields is what the person at that browser is reviewing, with each value as the application
-	// stored it. The enclave locates them and shows nothing else.
+	// stored it. The enclave locates them and shows nothing else — except where the container it kept
+	// already carries the regions its extraction located, which is where they are taken from when
+	// they are there at all.
 	Fields map[string]any `json:"fields,omitempty"`
 	// Model names the engine to ask when a page has no text layer to find a value in. A scan gets its
 	// regions from the same model that read it, because nothing else can see where a value is printed
@@ -313,12 +315,13 @@ func (s *server) handleDocumentReadKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cannot read the sealed document", http.StatusBadGateway)
 		return
 	}
-	header, sealedSource, sealedPages, err := docwire.Decode(bytes.NewReader(container))
+	header, parts, err := docwire.DecodeParts(bytes.NewReader(container))
 	if err != nil {
 		log.Printf("document read-key: container: %v", err)
 		http.Error(w, "stored bytes are not a sealed document", http.StatusUnprocessableEntity)
 		return
 	}
+	sealedSource, sealedPages := parts.Source, parts.Pages
 	if header.KeyVersion != keyVersion {
 		http.Error(w, fmt.Sprintf("document is sealed under key version %d", header.KeyVersion), http.StatusUnprocessableEntity)
 		return
@@ -365,7 +368,12 @@ func (s *server) handleDocumentReadKey(w http.ResponseWriter, r *http.Request) {
 		// Why nothing is being shown, when nothing is: it rides out with the container so the screen
 		// that is handed no page can say what happened instead of guessing at it.
 		reason = ""
-		painted, pieces, located, rerr := s.redactForReview(r.Context(), dek, keyVersion, sealedSource, pages, req.Fields,
+		// What the extraction already located for this document, where the container it kept carries
+		// it: the pages were read once, and the boxes found then are the boxes this asks for now. Only
+		// the values that are not in it are located here, which is what makes a review of a document
+		// read by a deployment that stores its regions cost the engine nothing.
+		known := openRegions(dek, keyVersion, parts.Regions)
+		painted, pieces, located, rerr := s.redactForReview(r.Context(), dek, keyVersion, sealedSource, pages, req.Fields, known,
 			func(ctx context.Context, fields map[string]any, drawn [][]byte, dims []redact.Page) map[string]redact.Box {
 				return s.boxesFromModel(ctx, fields, drawn, dims, req.Model, id.TenantID, req.ChallengeNonce)
 			})
@@ -470,6 +478,15 @@ type extractRequest struct {
 	SourceURL      string          `json:"source_url"`
 	Model          string          `json:"model,omitempty"`
 	ChallengeNonce string          `json:"challenge_nonce,omitempty"`
+	// Locate asks where each value this read produces is printed on the page, and comes back as one
+	// sealed part the caller appends to the container it keeps — so a later read-key answers from it
+	// instead of asking the engine the same question in front of a person.
+	//
+	// Unstated means the read and nothing else: a caller that wants only the fields pays for only the
+	// fields. It is a request and not an always-on step because the locating costs a picture of each
+	// page and a model call for a document with no text layer, which is work a caller that never shows
+	// a page should not be charged for.
+	Locate bool `json:"locate,omitempty"`
 }
 
 type extractResponse struct {
@@ -493,7 +510,11 @@ type extractResponse struct {
 	Pages           int                `json:"pages"`
 	// ReadFrom says what the read was made of: the document's text layer, or its pages as
 	// pictures. A caller that shows a person what was read needs to know which it was.
-	ReadFrom      string          `json:"read_from,omitempty"`
+	ReadFrom string `json:"read_from,omitempty"`
+	// Regions is where each value of this read is printed, sealed under the document's own key, for
+	// the caller to put into the container it keeps. Absent when the read did not ask for it, and
+	// absent when nothing could be located — a review locates for itself in both cases.
+	Regions       *regionsPart    `json:"regions,omitempty"`
 	ReceiptID     string          `json:"receipt_id,omitempty"`
 	SealedReceipt json.RawMessage `json:"sealed_receipt,omitempty"`
 	ReceiptError  string          `json:"receipt_error,omitempty"`
@@ -673,6 +694,10 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 	// pages, not the strips a page may have been cut into — a strip count would make `pages=3` mean
 	// something different from what the caller sent.
 	pagesDrawn := 0
+	// drawnPages are the full-page renders a picture read was made from, in page order. They are kept
+	// beyond the branch below because locating a value on a scan needs the picture of the page that
+	// the engine was shown, and this is the only place in the enclave that has it.
+	var drawnPages [][]byte
 	var (
 		images     []inference.Image
 		imagePages []extract.PageImage
@@ -704,6 +729,7 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var bands []render.Band
+		drawnPages = rendered
 		for i, page := range rendered {
 			strips, bandErr := render.SplitBands(page, readBandMaxPixels())
 			if bandErr != nil {
@@ -810,6 +836,19 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 		source = "logprobs"
 	}
 
+	// Where each value of this read is printed, when the caller asked for it. It is worked out here
+	// because here is where the pages are — the text they were read from and the renders a picture
+	// read was made from both go out of scope at the end of this handler — and because a review that
+	// has to find them again does so in front of a person.
+	//
+	// A locating that fails costs the read nothing: the fields and the receipt are already in hand,
+	// and a review falls back to locating for itself.
+	var regions *regionsPart
+	if req.Locate {
+		regions = s.regionsForTheReview(r.Context(), dek, keyVersion, plaintext, drawnPages, answer.Fields,
+			strings.TrimSpace(req.SchemaID), req.Model, id.TenantID, strings.TrimSpace(req.ChallengeNonce))
+	}
+
 	// How many pages the read actually covered: the pages with text, or the pages that were
 	// drawn and shown to the model.
 	pagesRead := len(render.PageTexts(text))
@@ -827,6 +866,7 @@ func (s *server) handleDocumentExtract(w http.ResponseWriter, r *http.Request) {
 		ModelConfidence:  answer.Confidence,
 		Pages:            pagesRead,
 		ReadFrom:         readFrom,
+		Regions:          regions,
 		RawAnswer:        completion.Content,
 		AnswerSHA256:     docwire.Digest([]byte(completion.Content)),
 	}
