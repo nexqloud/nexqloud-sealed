@@ -163,6 +163,15 @@ the engine placed none of: …"*. It names fields, never a value read off a page
 page repeats that sentence rather than guessing, and the person reading it can tell a scan from a
 missing location from a form that does not print a value.
 
+**The units are read per value, not per answer.** Measured against the real model: asked for fractions
+of the page, it sometimes answers a point in the render's pixels — and does so *within one box*, so
+`[480, 395, 0.08, 0.02]` came back for a value whose x and y were pixels and whose width and height
+were fractions. Read as fractions that box clamps to the page edge and comes out empty, which is how
+two scanned documents were withheld with nothing to show for it. So a number above 1 is taken as
+pixels of the render and divided by the render's own size, each number on its own; the fix is logged
+when it happens rather than silently tolerated. Every located region is then grown by a small margin
+before anything is cut or painted from it, because a model points near a value, not exactly at it.
+
 The locating question is put in batches of a few values rather than all of them at once: an engine
 asked about a whole long form tends to answer in a shape it was not asked for, and one such answer
 would otherwise cost every field on the document. A batch that fails costs only its own fields.

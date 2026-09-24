@@ -62,7 +62,8 @@ func TestAScanGetsItsRegionsFromTheEngine(t *testing.T) {
 		t.Fatalf("both values were placed by the engine, got %d: %+v", len(found), found)
 	}
 	importer := found["importer_of_record"]
-	if math.Abs(importer.Left-61.2) > 0.01 || math.Abs(importer.Top-158.4) > 0.01 {
+	// The page's own points, grown by the margin every located region gets before anything is cut.
+	if math.Abs(importer.Left-(61.2-boxMarginPoints)) > 0.01 || math.Abs(importer.Top-(158.4-boxMarginPoints)) > 0.01 {
 		t.Fatalf("the region has to be in the page's own points, got %+v", importer)
 	}
 	if importer.Page != 1 {
@@ -163,6 +164,42 @@ type countingEngine struct {
 func (c *countingEngine) Complete(req inference.Request) (inference.Response, error) {
 	c.calls++
 	return c.inner.Complete(req)
+}
+
+// The measured failure: an engine answering in pixels for some values of the same box.
+func TestAnAnswerInPixelsIsReadAsPixels(t *testing.T) {
+	// Taken from the real answer for the bill of lading: x and y in the render's pixels, width and
+	// height as fractions of it.
+	x, y, width, height, inPixels := inFractions([4]float64{480, 395, 0.08, 0.02}, 1654, 2339)
+	if !inPixels {
+		t.Fatal("a value above 1 cannot be a fraction")
+	}
+	if math.Abs(x-480.0/1654) > 0.0001 || math.Abs(y-395.0/2339) > 0.0001 {
+		t.Fatalf("pixels have to become fractions of the render: %v %v", x, y)
+	}
+	if width != 0.08 || height != 0.02 {
+		t.Fatalf("values that are already fractions stay as they are: %v %v", width, height)
+	}
+
+	// And it lands on the page instead of collapsing onto its edge, which is what went wrong.
+	box := redact.NormalisedBox(1, x, y, width, height, 595.44, 842.04)
+	box = grow(box, boxMarginPoints, 595.44, 842.04)
+	if box.Right-box.Left <= 0 || box.Bottom-box.Top <= 0 {
+		t.Fatalf("the region has to be a region, got %+v", box)
+	}
+	if box.Right > 595.44 || box.Bottom > 842.04 || box.Left < 0 || box.Top < 0 {
+		t.Fatalf("growing a region must not push it off the page, got %+v", box)
+	}
+}
+
+func TestAnAnswerInFractionsSaysSo(t *testing.T) {
+	x, y, _, _, inPixels := inFractions([4]float64{0.4, 0.5, 0.1, 0.04}, 1224, 1584)
+	if inPixels {
+		t.Fatal("fractions are not pixels")
+	}
+	if x != 0.4 || y != 0.5 {
+		t.Fatalf("fractions pass through unchanged, got %v %v", x, y)
+	}
 }
 
 func TestNoEngineMeansNoRegion(t *testing.T) {

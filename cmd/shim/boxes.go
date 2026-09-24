@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/png"
 	"log"
 	"sort"
 	"strings"
@@ -49,6 +52,15 @@ func (s *server) boxesFromModel(ctx context.Context, fields map[string]any, page
 	}
 	sort.Strings(names)
 
+	// The image's own size, for the answers that come back in pixels rather than fractions.
+	imageWidth, imageHeight := 0, 0
+	if config, _, err := image.DecodeConfig(bytes.NewReader(pages[0])); err == nil {
+		imageWidth, imageHeight = config.Width, config.Height
+	}
+	if imageWidth == 0 || imageHeight == 0 {
+		log.Printf("document read-key: cannot measure the page render, so an answer in pixels could not be read")
+	}
+
 	found := map[string]redact.Box{}
 	for start := 0; start < len(names); start += maxBoxFields {
 		end := start + maxBoxFields
@@ -71,11 +83,18 @@ func (s *server) boxesFromModel(ctx context.Context, fields map[string]any, page
 				log.Printf("document read-key: page %d has no size, so a region on it cannot be placed", placement.Page)
 				continue
 			}
-			box := redact.NormalisedBox(placement.Page, placement.Box[0], placement.Box[1], placement.Box[2], placement.Box[3], page.Width, page.Height)
+			x, y, width, height, inPixels := inFractions(placement.Box, imageWidth, imageHeight)
+			if inPixels {
+				log.Printf("document read-key: %s was answered in page pixels, not fractions; read as pixels", field)
+			}
+			box := redact.NormalisedBox(placement.Page, x, y, width, height, page.Width, page.Height)
 			if box.Right-box.Left <= 0 || box.Bottom-box.Top <= 0 {
 				log.Printf("document read-key: %s came back with an empty region", field)
 				continue
 			}
+			// Grown only once it is known to be a region: growing nothing would put a box at a page
+			// corner and show a part of the document nobody asked about.
+			box = grow(box, boxMarginPoints, page.Width, page.Height)
 			found[field] = box
 		}
 	}
@@ -83,6 +102,59 @@ func (s *server) boxesFromModel(ctx context.Context, fields map[string]any, page
 	log.Printf("document read-key: the engine placed %d of %d value(s) on %d page(s) of a document with no text layer",
 		len(found), len(fields), len(pages))
 	return found
+}
+
+// inFractions reads an answer that may not be in the units it was asked for.
+//
+// A model asked for fractions of the page sometimes answers with a point in the render's pixels —
+// and, measured against the real one, it does so per value rather than per answer: one field came
+// back as [480, 395, 0.08, 0.02], the first two in pixels and the last two in fractions. Read as
+// fractions, that box clamps to the page edge and comes out empty, which is how two scanned
+// documents were withheld with nothing to show for it.
+//
+// So each number is read on its own: above 1 it cannot be a fraction of anything and is taken as
+// pixels, which needs the render's own size to become a fraction. The second return says whether any
+// value had to be read that way, because a model that keeps doing this should be visible in the log
+// rather than silently tolerated.
+func inFractions(box [4]float64, imageWidth, imageHeight int) (x, y, width, height float64, inPixels bool) {
+	asFraction := func(value float64, extent int) float64 {
+		if value <= 1.0 {
+			return value
+		}
+		inPixels = true
+		if extent <= 0 {
+			return 1.0
+		}
+		return value / float64(extent)
+	}
+	return asFraction(box[0], imageWidth), asFraction(box[1], imageHeight), asFraction(box[2], imageWidth), asFraction(box[3], imageHeight), inPixels
+}
+
+// boxMarginPoints is how much a model's region is grown before anything is cut or painted from it.
+//
+// A model points at where a value is, and it is approximate: a box that stops a hair inside the
+// value leaves half of it outside the piece, which is worse than showing a little more than asked.
+// So every located region is grown by this much, clamped to the page.
+const boxMarginPoints = 6.0
+
+func grow(box redact.Box, margin, pageWidth, pageHeight float64) redact.Box {
+	box.Left -= margin
+	box.Top -= margin
+	box.Right += margin
+	box.Bottom += margin
+	if box.Left < 0 {
+		box.Left = 0
+	}
+	if box.Top < 0 {
+		box.Top = 0
+	}
+	if box.Right > pageWidth {
+		box.Right = pageWidth
+	}
+	if box.Bottom > pageHeight {
+		box.Bottom = pageHeight
+	}
+	return box
 }
 
 // maxBoxFields is how many values one locating question carries. Small enough that the answer stays a
